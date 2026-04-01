@@ -1,0 +1,3 @@
+# # Skip configuration for SkipContacts module
+#build:
+#  contents:
