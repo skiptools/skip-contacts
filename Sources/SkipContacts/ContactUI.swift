@@ -240,18 +240,23 @@ struct ContactPickerRepresentable: UIViewControllerRepresentable {
         }
 
         nonisolated func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
-            let callback = MainActor.assumeIsolated { parent.onCancel }
-            callback()
+            MainActor.assumeIsolated {
+                parent.onCancel()
+            }
         }
 
         nonisolated func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
-            let callback = MainActor.assumeIsolated { parent.onSelectContact }
-            callback(contact.identifier)
+            let id = contact.identifier
+            MainActor.assumeIsolated {
+                parent.onSelectContact(id)
+            }
         }
 
         nonisolated func contactPicker(_ picker: CNContactPickerViewController, didSelect contacts: [CNContact]) {
-            let callback = MainActor.assumeIsolated { parent.onSelectContacts }
-            callback(contacts.map { $0.identifier })
+            let ids = contacts.map { $0.identifier }
+            MainActor.assumeIsolated {
+                parent.onSelectContacts(ids)
+            }
         }
     }
 }
@@ -293,8 +298,9 @@ struct ContactViewRepresentable: UIViewControllerRepresentable {
         }
 
         nonisolated func contactViewController(_ viewController: CNContactViewController, didCompleteWith contact: CNContact?) {
-            let callback = MainActor.assumeIsolated { parent.onDismiss }
-            callback()
+            MainActor.assumeIsolated {
+                parent.onDismiss()
+            }
         }
 
         @objc func done() {
@@ -363,11 +369,9 @@ struct ContactEditRepresentable: UIViewControllerRepresentable {
         }
 
         nonisolated func contactViewController(_ viewController: CNContactViewController, didCompleteWith contact: CNContact?) {
-            let callback = MainActor.assumeIsolated { parent.onComplete }
-            if contact != nil {
-                callback(.saved)
-            } else {
-                callback(.canceled)
+            let didSave = contact != nil
+            MainActor.assumeIsolated {
+                parent.onComplete(didSave ? .saved : .canceled)
             }
         }
     }
