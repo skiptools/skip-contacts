@@ -232,23 +232,26 @@ struct ContactPickerRepresentable: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: CNContactPickerViewController, context: Context) {}
 
-    class Coordinator: NSObject, CNContactPickerDelegate {
+    @MainActor class Coordinator: NSObject, CNContactPickerDelegate {
         let parent: ContactPickerRepresentable
 
         init(_ parent: ContactPickerRepresentable) {
             self.parent = parent
         }
 
-        func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
-            parent.onCancel()
+        nonisolated func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
+            let callback = MainActor.assumeIsolated { parent.onCancel }
+            callback()
         }
 
-        func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
-            parent.onSelectContact(contact.identifier)
+        nonisolated func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
+            let callback = MainActor.assumeIsolated { parent.onSelectContact }
+            callback(contact.identifier)
         }
 
-        func contactPicker(_ picker: CNContactPickerViewController, didSelect contacts: [CNContact]) {
-            parent.onSelectContacts(contacts.map { $0.identifier })
+        nonisolated func contactPicker(_ picker: CNContactPickerViewController, didSelect contacts: [CNContact]) {
+            let callback = MainActor.assumeIsolated { parent.onSelectContacts }
+            callback(contacts.map { $0.identifier })
         }
     }
 }
@@ -282,15 +285,16 @@ struct ContactViewRepresentable: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
 
-    class Coordinator: NSObject, CNContactViewControllerDelegate {
+    @MainActor class Coordinator: NSObject, CNContactViewControllerDelegate {
         let parent: ContactViewRepresentable
 
         init(_ parent: ContactViewRepresentable) {
             self.parent = parent
         }
 
-        func contactViewController(_ viewController: CNContactViewController, didCompleteWith contact: CNContact?) {
-            parent.onDismiss()
+        nonisolated func contactViewController(_ viewController: CNContactViewController, didCompleteWith contact: CNContact?) {
+            let callback = MainActor.assumeIsolated { parent.onDismiss }
+            callback()
         }
 
         @objc func done() {
@@ -351,18 +355,19 @@ struct ContactEditRepresentable: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
 
-    class Coordinator: NSObject, CNContactViewControllerDelegate {
+    @MainActor class Coordinator: NSObject, CNContactViewControllerDelegate {
         let parent: ContactEditRepresentable
 
         init(_ parent: ContactEditRepresentable) {
             self.parent = parent
         }
 
-        func contactViewController(_ viewController: CNContactViewController, didCompleteWith contact: CNContact?) {
+        nonisolated func contactViewController(_ viewController: CNContactViewController, didCompleteWith contact: CNContact?) {
+            let callback = MainActor.assumeIsolated { parent.onComplete }
             if contact != nil {
-                parent.onComplete(.saved)
+                callback(.saved)
             } else {
-                parent.onComplete(.canceled)
+                callback(.canceled)
             }
         }
     }
