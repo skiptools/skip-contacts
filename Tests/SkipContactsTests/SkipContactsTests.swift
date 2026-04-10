@@ -440,3 +440,383 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
 struct TestData: Codable, Hashable {
     var testModuleName: String
 }
+
+// MARK: - Integration Tests (real contacts database)
+
+/// Returns true when running on a real device or emulator (not Robolectric or macOS).
+/// macOS test processes lack contacts entitlements; iOS simulator auto-grants them.
+private func isLiveDevice() -> Bool {
+    #if os(iOS)
+    return true
+    #elseif SKIP
+    return android.os.Build.FINGERPRINT != nil && "robolectric" != android.os.Build.FINGERPRINT
+    #else
+    return false
+    #endif
+}
+
+/// Helper that creates a contact and returns its ID, always cleaning it up
+/// after `body` returns (even on throw).
+private func withTestContact(_ contact: Contact, body: (String) throws -> Void) throws {
+    let manager = ContactManager.shared
+    let id = try manager.createContact(contact)
+    do {
+        try body(id)
+        try manager.deleteContact(id: id)
+    } catch {
+        // best-effort cleanup
+        try? manager.deleteContact(id: id)
+        throw error
+    }
+}
+
+@Suite struct ContactIntegrationTests {
+
+    // SKIP INSERT:
+    // @get:org.junit.Rule
+    // val grantPermissionRule: androidx.test.rule.GrantPermissionRule = androidx.test.rule.GrantPermissionRule.grant(android.Manifest.permission.READ_CONTACTS, android.Manifest.permission.WRITE_CONTACTS)
+
+    // MARK: - Create & Fetch
+
+    @Test func testCreateAndFetchContact() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipTest", familyName: "CreateFetch")
+        contact.phoneNumbers = [ContactPhoneNumber(label: .mobile, value: "+15550001111")]
+        contact.emailAddresses = [ContactEmailAddress(label: .work, value: "skiptest@example.test")]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.givenName == "SkipTest")
+            #expect(fetched.familyName == "CreateFetch")
+            #expect(fetched.phoneNumbers.count >= 1)
+            #expect(fetched.emailAddresses.count >= 1)
+
+            let phone = try #require(fetched.phoneNumbers.first)
+            // Phone number formats may vary by platform; just check it contains the digits
+            #expect(phone.value.contains("5550001111"))
+
+            let email = try #require(fetched.emailAddresses.first)
+            #expect(email.value == "skiptest@example.test")
+        }
+    }
+
+    @Test func testCreateContactWithFullName() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(
+            namePrefix: "Dr.",
+            givenName: "SkipInteg",
+            middleName: "M",
+            familyName: "FullName",
+            nameSuffix: "Jr."
+        )
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.givenName == "SkipInteg")
+            #expect(fetched.middleName == "M")
+            #expect(fetched.familyName == "FullName")
+            #expect(fetched.namePrefix == "Dr.")
+            #expect(fetched.nameSuffix == "Jr.")
+        }
+    }
+
+    @Test func testCreateOrganizationContact() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(
+            contactType: .organization,
+            organizationName: "SkipTest Corp",
+            departmentName: "Engineering",
+            jobTitle: "Tester"
+        )
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.organizationName == "SkipTest Corp")
+            #expect(fetched.departmentName == "Engineering")
+            #expect(fetched.jobTitle == "Tester")
+        }
+    }
+
+    @Test func testCreateContactWithPostalAddress() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipTest", familyName: "Address")
+        contact.postalAddresses = [
+            ContactPostalAddress(
+                label: .home,
+                street: "123 Test Street",
+                city: "Testville",
+                state: "TS",
+                postalCode: "99999",
+                country: "US"
+            )
+        ]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.postalAddresses.count >= 1)
+            let addr = try #require(fetched.postalAddresses.first)
+            #expect(addr.street == "123 Test Street")
+            #expect(addr.city == "Testville")
+            #expect(addr.state == "TS")
+            #expect(addr.postalCode == "99999")
+        }
+    }
+
+    @Test func testCreateContactWithMultiplePhones() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipTest", familyName: "MultiPhone")
+        contact.phoneNumbers = [
+            ContactPhoneNumber(label: .mobile, value: "+15550002222"),
+            ContactPhoneNumber(label: .work, value: "+15550003333"),
+            ContactPhoneNumber(label: .home, value: "+15550004444")
+        ]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.phoneNumbers.count == 3)
+        }
+    }
+
+    @Test func testCreateContactWithNote() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipTest", familyName: "WithNote")
+        contact.note = "This is a test note from skip-contacts integration tests"
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id, includeNote: true))
+            #expect(fetched.note == "This is a test note from skip-contacts integration tests")
+        }
+    }
+
+    // MARK: - Query / Filter
+
+    @Test func testQueryByName() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipUnique\(Int.random(in: 10000..<99999))", familyName: "QueryTest")
+
+        try withTestContact(contact) { _ in
+            let options = ContactFetchOptions(nameFilter: contact.givenName)
+            let result = try ContactManager.shared.getContacts(options: options)
+            #expect(result.contacts.count >= 1)
+            let match = result.contacts.first { $0.givenName == contact.givenName }
+            #expect(match != nil)
+        }
+    }
+
+    @Test func testQueryByID() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipTest", familyName: "QueryByID")
+
+        try withTestContact(contact) { id in
+            let options = ContactFetchOptions(contactIDs: [id])
+            let result = try ContactManager.shared.getContacts(options: options)
+            #expect(result.contacts.count == 1)
+            #expect(result.contacts.first?.givenName == "SkipTest")
+        }
+    }
+
+    @Test func testHasContacts() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipTest", familyName: "HasContacts")
+
+        try withTestContact(contact) { _ in
+            let has = try ContactManager.shared.hasContacts()
+            #expect(has == true)
+        }
+    }
+
+    // MARK: - Update
+
+    @Test func testUpdateContact() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let uniqueName = "SkipUpd\(Int.random(in: 10000..<99999))"
+        let contact = Contact(givenName: uniqueName, familyName: "BeforeUpdate")
+        let id = try manager.createContact(contact)
+
+        let toUpdate = Contact(id: id, givenName: uniqueName, familyName: "AfterUpdate")
+        toUpdate.emailAddresses = [ContactEmailAddress(label: .work, value: "updated@example.test")]
+        try manager.updateContact(toUpdate)
+
+        // Android's update does delete+recreate which changes the ID,
+        // so query by name instead of the original ID.
+        let result = try manager.getContacts(options: ContactFetchOptions(nameFilter: uniqueName))
+        let fetched = try #require(result.contacts.first { $0.givenName == uniqueName })
+        #expect(fetched.familyName == "AfterUpdate")
+        #expect(fetched.emailAddresses.count >= 1)
+        let email = try #require(fetched.emailAddresses.first)
+        #expect(email.value == "updated@example.test")
+
+        // Clean up using the (potentially new) ID
+        if let newID = fetched.id {
+            try? manager.deleteContact(id: newID)
+        }
+    }
+
+    // MARK: - Delete
+
+    @Test func testDeleteContact() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let contact = Contact(givenName: "SkipTest", familyName: "ToDelete")
+        let id = try manager.createContact(contact)
+
+        // Verify it exists
+        let before = try manager.getContact(id: id)
+        #expect(before != nil)
+
+        // Delete
+        try manager.deleteContact(id: id)
+
+        // Verify it no longer exists
+        let after = try manager.getContact(id: id)
+        #expect(after == nil)
+    }
+
+    // MARK: - Groups
+
+    @Test func testCreateAndDeleteGroup() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let groupName = "SkipTestGroup\(Int.random(in: 10000..<99999))"
+        let groupID = try manager.createGroup(name: groupName)
+
+        // Verify the group was created and can be found
+        let groups = try manager.getGroups()
+        let found = groups.first { $0.name == groupName }
+        #expect(found != nil)
+
+        // Delete should succeed without throwing
+        try manager.deleteGroup(id: groupID)
+    }
+
+    @Test func testAddContactToGroup() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let contact = Contact(givenName: "SkipTest", familyName: "GroupMember")
+        let contactID = try manager.createContact(contact)
+        let groupName = "SkipTestGrp\(Int.random(in: 10000..<99999))"
+        let groupID = try manager.createGroup(name: groupName)
+
+        do {
+            try manager.addContactToGroup(contactID: contactID, groupID: groupID)
+            try manager.removeContactFromGroup(contactID: contactID, groupID: groupID)
+        } catch {
+            try? manager.deleteContact(id: contactID)
+            try? manager.deleteGroup(id: groupID)
+            throw error
+        }
+
+        try manager.deleteContact(id: contactID)
+        try manager.deleteGroup(id: groupID)
+    }
+
+    // MARK: - Containers
+
+    @Test func testGetContainers() throws {
+        guard isLiveDevice() else { return }
+
+        let containers = try ContactManager.shared.getContainers()
+        #expect(containers.count >= 1)
+    }
+
+    @Test func testGetDefaultContainerID() throws {
+        guard isLiveDevice() else { return }
+
+        let defaultID = try ContactManager.shared.getDefaultContainerID()
+        #expect(!defaultID.isEmpty)
+    }
+
+    // MARK: - Pagination
+
+    @Test func testPagination() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        // Create a few contacts
+        var createdIDs: [String] = []
+        for i in 0..<3 {
+            let c = Contact(givenName: "SkipPage\(i)", familyName: "PaginationTest")
+            let id = try manager.createContact(c)
+            createdIDs.append(id)
+        }
+
+        do {
+            // Fetch with page size 2
+            let page1 = try manager.getContacts(options: ContactFetchOptions(nameFilter: "SkipPage", pageSize: 2))
+            #expect(page1.contacts.count <= 2)
+
+            // Clean up
+            for id in createdIDs {
+                try manager.deleteContact(id: id)
+            }
+        } catch {
+            for id in createdIDs {
+                try? manager.deleteContact(id: id)
+            }
+            throw error
+        }
+    }
+
+    // MARK: - Complex contact round-trip
+
+    @Test func testComplexContactRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(
+            givenName: "SkipComplex",
+            familyName: "RoundTrip",
+            nickname: "Skipper",
+            organizationName: "Skip Tools",
+            departmentName: "QA",
+            jobTitle: "Test Engineer"
+        )
+        contact.phoneNumbers = [
+            ContactPhoneNumber(label: .mobile, value: "+15550009999"),
+            ContactPhoneNumber(label: .work, value: "+15550008888")
+        ]
+        contact.emailAddresses = [
+            ContactEmailAddress(label: .home, value: "skipper@example.test"),
+            ContactEmailAddress(label: .work, value: "skipper.work@example.test")
+        ]
+        contact.postalAddresses = [
+            ContactPostalAddress(
+                label: .work,
+                street: "1 Skip Way",
+                city: "Skiptown",
+                state: "SK",
+                postalCode: "00001",
+                country: "US"
+            )
+        ]
+        contact.urlAddresses = [
+            ContactURLAddress(label: .homepage, value: "https://skip.tools")
+        ]
+        contact.note = "Integration test complex contact"
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id, includeNote: true))
+            #expect(fetched.givenName == "SkipComplex")
+            #expect(fetched.familyName == "RoundTrip")
+            #expect(fetched.organizationName == "Skip Tools")
+            #expect(fetched.jobTitle == "Test Engineer")
+            #expect(fetched.phoneNumbers.count == 2)
+            #expect(fetched.emailAddresses.count == 2)
+            #expect(fetched.postalAddresses.count >= 1)
+            #expect(fetched.note == "Integration test complex contact")
+        }
+    }
+}
