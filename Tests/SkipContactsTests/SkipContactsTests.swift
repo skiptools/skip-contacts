@@ -443,12 +443,20 @@ struct TestData: Codable, Hashable {
 
 // MARK: - Integration Tests (real contacts database)
 
-/// Returns true when running on a real device or emulator (not Robolectric or macOS).
-/// macOS test processes lack contacts entitlements; iOS simulator auto-grants them.
+/// Returns true only when running on a real Android device or emulator.
+///
+/// These integration tests are disabled on all Apple platforms because the
+/// XCTest host process cannot communicate with the `contactsd` XPC service
+/// — even on the iOS simulator where the Contacts entitlement is nominally
+/// granted, every CNContactStore call fails with `CNErrorDomain Code=1
+/// "Communication Error"`.  On macOS the test process similarly lacks the
+/// required entitlements.
+///
+/// On Android the tests are disabled under Robolectric (no real
+/// ContentProvider) but run on a connected emulator or device when
+/// ANDROID_SERIAL is set.
 private func isLiveDevice() -> Bool {
-    #if os(iOS)
-    return true
-    #elseif SKIP
+    #if SKIP
     return android.os.Build.FINGERPRINT != nil && "robolectric" != android.os.Build.FINGERPRINT
     #else
     return false
