@@ -597,6 +597,8 @@ public final class ContactFetchOptions {
     public var nameFilter: String?
     /// Filter contacts by specific IDs.
     public var contactIDs: [String]?
+    /// Filter contacts by membership in the group with this identifier.
+    public var groupID: String?
     /// Maximum number of results.
     public var pageSize: Int?
     /// Offset for pagination.
@@ -611,6 +613,7 @@ public final class ContactFetchOptions {
     public init(
         nameFilter: String? = nil,
         contactIDs: [String]? = nil,
+        groupID: String? = nil,
         pageSize: Int? = nil,
         pageOffset: Int? = nil,
         sortOrder: ContactSortOrder = .none,
@@ -619,6 +622,7 @@ public final class ContactFetchOptions {
     ) {
         self.nameFilter = nameFilter
         self.contactIDs = contactIDs
+        self.groupID = groupID
         self.pageSize = pageSize
         self.pageOffset = pageOffset
         self.sortOrder = sortOrder

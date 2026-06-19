@@ -127,6 +127,33 @@ if let contact = try manager.getContact(id: contactID, includeImages: true) {
 }
 ```
 
+### Fetch all contacts in a group
+
+Pass a group identifier (see [Contact Groups](#contact-groups)) to retrieve every
+contact that is a member of that group:
+
+```swift
+let contacts = try manager.getContacts(inGroup: groupID)
+for contact in contacts {
+    print(contact.displayName)
+}
+```
+
+The same filter is available on `ContactFetchOptions` via `groupID`, so it can be
+combined with sorting, pagination, and image/note inclusion:
+
+```swift
+let options = ContactFetchOptions(
+    groupID: groupID,
+    sortOrder: .familyName,
+    includeImages: true
+)
+let result = try manager.getContacts(options: options)
+```
+
+> Note: `groupID` takes precedence over `nameFilter`; to filter by both, fetch the
+> group members and filter the results in Swift.
+
 ### Check if contacts exist
 
 ```swift
@@ -209,6 +236,9 @@ let groupID = try manager.createGroup(name: "Book Club")
 
 // Add a contact to a group
 try manager.addContactToGroup(contactID: contactID, groupID: groupID)
+
+// List all contacts in a group
+let members = try manager.getContacts(inGroup: groupID)
 
 // Remove a contact from a group
 try manager.removeContactFromGroup(contactID: contactID, groupID: groupID)
