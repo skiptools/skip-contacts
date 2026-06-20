@@ -84,14 +84,20 @@ public final class ContactManager {
     }
 
     /// Fetch a single contact by ID.
-    public func getContact(id: String, includeImages: Bool = false, includeNote: Bool = true) throws -> Contact? {
+    ///
+    /// Note: requesting the note field (`includeNote: true`) requires the
+    /// `com.apple.developer.contacts.notes` entitlement on iOS.
+    public func getContact(id: String, includeImages: Bool = false, includeNote: Bool = false) throws -> Contact? {
         let options = ContactFetchOptions(contactIDs: [id], includeImages: includeImages, includeNote: includeNote)
         let result = try getContacts(options: options)
         return result.contacts.first
     }
 
     /// Fetch all contacts that are members of the group with the given identifier.
-    public func getContacts(inGroup groupID: String, includeImages: Bool = false, includeNote: Bool = true) throws -> [Contact] {
+    ///
+    /// Note: requesting the note field (`includeNote: true`) requires the
+    /// `com.apple.developer.contacts.notes` entitlement on iOS.
+    public func getContacts(inGroup groupID: String, includeImages: Bool = false, includeNote: Bool = false) throws -> [Contact] {
         let options = ContactFetchOptions(groupID: groupID, includeImages: includeImages, includeNote: includeNote)
         return try getContacts(options: options).contacts
     }
@@ -484,7 +490,11 @@ extension ContactManager {
             CNLabeledValue(label: rel.customLabel ?? rel.label.cnLabelValue, value: CNContactRelation(name: rel.name))
         }
 
-        mutable.note = contact.note
+        // Writing the note field requires the `com.apple.developer.contacts.notes`
+        // entitlement on iOS, so only touch it when a note is actually provided.
+        if !contact.note.isEmpty {
+            mutable.note = contact.note
+        }
 
         if let img = contact.image {
             mutable.imageData = img.imageData
@@ -505,7 +515,10 @@ extension ContactManager {
         guard let contactID = contact.id else {
             throw ContactError.invalidData("Contact must have an id to update")
         }
-        let keys = keysToFetch(options: ContactFetchOptions(includeImages: true, includeNote: true))
+        // Only fetch the restricted note key when the update actually carries a
+        // note to write; otherwise the fetch would require the
+        // `com.apple.developer.contacts.notes` entitlement for every update.
+        let keys = keysToFetch(options: ContactFetchOptions(includeImages: true, includeNote: !contact.note.isEmpty))
         let cnContact = try contactStore.unifiedContact(withIdentifier: contactID, keysToFetch: keys)
         let mutable = cnContact.mutableCopy() as! CNMutableContact
         applyCNContactProperties(contact, to: mutable)

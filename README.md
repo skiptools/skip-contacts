@@ -39,6 +39,31 @@ Or in your `.xcconfig`:
 INFOPLIST_KEY_NSContactsUsageDescription = This app needs access to your contacts.
 ```
 
+#### Reading contact notes (restricted)
+
+The contact **note** field is restricted by Apple. Reading it requires the special
+`com.apple.developer.contacts.notes` entitlement, which you must
+[request from and be approved by Apple](https://developer.apple.com/contact/request/contact-note-field).
+Fetching a contact with the note key in `keysToFetch` while the app lacks this
+entitlement will fail.
+
+Because most apps do not have this entitlement, all fetch APIs in SkipContacts
+**default to `includeNote: false`** so they work out of the box. Notes are only
+read when you explicitly opt in:
+
+```swift
+// Default — does not touch the restricted note field, no entitlement needed
+let contact = try manager.getContact(id: contactID)
+
+// Opt in — only works if your app has the com.apple.developer.contacts.notes entitlement
+let withNote = try manager.getContact(id: contactID, includeNote: true)
+```
+
+Writing the note field (setting `Contact.note` to a non-empty value before
+`createContact`/`updateContact`) likewise requires the entitlement. If your app
+does not have it, leave `Contact.note` empty. This restriction is iOS-only; on
+Android the note is read and written normally.
+
 ### Android
 
 Add the following permissions to your `AndroidManifest.xml` (or the test target's `Skip/AndroidManifest.xml`):
@@ -101,7 +126,7 @@ let options = ContactFetchOptions(
     pageOffset: 0,
     sortOrder: .givenName,
     includeImages: true,
-    includeNote: true
+    includeNote: false // requires the com.apple.developer.contacts.notes entitlement on iOS
 )
 let result = try manager.getContacts(options: options)
 

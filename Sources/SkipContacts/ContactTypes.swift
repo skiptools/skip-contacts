@@ -607,7 +607,12 @@ public final class ContactFetchOptions {
     public var sortOrder: ContactSortOrder
     /// Whether to include image data in results.
     public var includeImages: Bool
-    /// Whether to include note field.
+    /// Whether to include the note field. Defaults to `false`.
+    ///
+    /// On iOS, reading the note field requires the special
+    /// `com.apple.developer.contacts.notes` entitlement, which must be requested
+    /// from and approved by Apple. Without it, fetches that request notes will
+    /// fail. See the README for details.
     public var includeNote: Bool
 
     public init(
@@ -618,7 +623,7 @@ public final class ContactFetchOptions {
         pageOffset: Int? = nil,
         sortOrder: ContactSortOrder = .none,
         includeImages: Bool = false,
-        includeNote: Bool = true
+        includeNote: Bool = false
     ) {
         self.nameFilter = nameFilter
         self.contactIDs = contactIDs

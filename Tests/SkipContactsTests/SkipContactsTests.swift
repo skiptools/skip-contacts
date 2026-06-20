@@ -276,7 +276,7 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(options.pageOffset == nil)
         #expect(options.sortOrder == .none)
         #expect(options.includeImages == false)
-        #expect(options.includeNote == true)
+        #expect(options.includeNote == false)
     }
 
     @Test func testFetchOptionsCustom() throws {
