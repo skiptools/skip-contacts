@@ -102,6 +102,22 @@ public final class ContactManager {
         return try getContacts(options: options).contacts
     }
 
+    /// Fetch all contacts that have a phone number matching the given number.
+    ///
+    /// Matching is performed by the platform using its own number-normalization
+    /// rules, so formatting differences (spaces, dashes, parentheses, and—on
+    /// Android—country-code variations) are generally ignored.
+    public func getContacts(matchingPhoneNumber number: String, includeImages: Bool = false, includeNote: Bool = false) throws -> [Contact] {
+        let options = ContactFetchOptions(phoneNumberFilter: number, includeImages: includeImages, includeNote: includeNote)
+        return try getContacts(options: options).contacts
+    }
+
+    /// Fetch all contacts that have an email address matching the given address.
+    public func getContacts(matchingEmail email: String, includeImages: Bool = false, includeNote: Bool = false) throws -> [Contact] {
+        let options = ContactFetchOptions(emailFilter: email, includeImages: includeImages, includeNote: includeNote)
+        return try getContacts(options: options).contacts
+    }
+
     /// Check whether any contacts exist in the database.
     public func hasContacts() throws -> Bool {
         let result = try getContacts(options: ContactFetchOptions(pageSize: 1))
@@ -262,6 +278,14 @@ extension ContactManager {
             contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
         } else if let groupID = options.groupID, !groupID.isEmpty {
             let predicate = CNContact.predicateForContactsInGroup(withIdentifier: groupID)
+            let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
+            contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
+        } else if let phone = options.phoneNumberFilter, !phone.isEmpty {
+            let predicate = CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: phone))
+            let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
+            contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
+        } else if let email = options.emailFilter, !email.isEmpty {
+            let predicate = CNContact.predicateForContacts(matchingEmailAddress: email)
             let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
             contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
         } else if let name = options.nameFilter, !name.isEmpty {
@@ -634,6 +658,24 @@ extension ContactManager {
             let placeholders = memberIDs.map { _ in "?" }.joined(separator: ",")
             selection = "\(android.provider.ContactsContract.Contacts._ID) IN (\(placeholders))"
             selectionArgs = memberIDs
+        } else if let phone = options.phoneNumberFilter, !phone.isEmpty {
+            // Use the platform phone-lookup filter URI (which normalizes numbers)
+            // to resolve matching aggregate contact IDs, then constrain the query.
+            let matchIDs = androidContactIDsMatchingPhone(resolver: resolver, number: phone)
+            if matchIDs.isEmpty {
+                return ContactFetchResult(contacts: [], hasNextPage: false)
+            }
+            let placeholders = matchIDs.map { _ in "?" }.joined(separator: ",")
+            selection = "\(android.provider.ContactsContract.Contacts._ID) IN (\(placeholders))"
+            selectionArgs = matchIDs
+        } else if let email = options.emailFilter, !email.isEmpty {
+            let matchIDs = androidContactIDsMatchingEmail(resolver: resolver, email: email)
+            if matchIDs.isEmpty {
+                return ContactFetchResult(contacts: [], hasNextPage: false)
+            }
+            let placeholders = matchIDs.map { _ in "?" }.joined(separator: ",")
+            selection = "\(android.provider.ContactsContract.Contacts._ID) IN (\(placeholders))"
+            selectionArgs = matchIDs
         } else if let name = options.nameFilter, !name.isEmpty {
             selection = "\(android.provider.ContactsContract.Contacts.DISPLAY_NAME_PRIMARY) LIKE ?"
             selectionArgs = ["%\(name)%"]
@@ -702,36 +744,71 @@ extension ContactManager {
         return ContactFetchResult(contacts: contacts, hasNextPage: false)
     }
 
+    /// Collects the distinct, non-empty values of the given column from a cursor,
+    /// closing the cursor when done.
+    ///
+    /// A single aggregate contact may produce multiple matching rows (e.g. several
+    /// raw contacts, or multiple matching phone/email rows), so the results are
+    /// de-duplicated.
+    private func collectDistinctStrings(cursor: android.database.Cursor?, columnName: String) -> [String] {
+        var values: [String] = []
+        var seen = Set<String>()
+        if let cursor = cursor {
+            let idx = cursor.getColumnIndex(columnName)
+            while cursor.moveToNext() {
+                let value = idx >= 0 ? (cursor.getString(idx) ?? "") : ""
+                if !value.isEmpty && !seen.contains(value) {
+                    seen.insert(value)
+                    values.append(value)
+                }
+            }
+            cursor.close()
+        }
+        return values
+    }
+
     /// Returns the distinct aggregate contact IDs that belong to the group with the given identifier.
     private func androidContactIDsInGroup(resolver: android.content.ContentResolver, groupID: String) -> [String] {
-        let dataUri = android.provider.ContactsContract.Data.CONTENT_URI
         let selection = "\(android.provider.ContactsContract.Data.MIMETYPE) = ? AND \(android.provider.ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID) = ?"
         let args = [android.provider.ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE, groupID]
 
         let cursor = resolver.query(
-            dataUri,
+            android.provider.ContactsContract.Data.CONTENT_URI,
             [android.provider.ContactsContract.Data.CONTACT_ID].toList().toTypedArray(),
             selection,
             args.toList().toTypedArray(),
             nil
         )
+        return collectDistinctStrings(cursor: cursor, columnName: android.provider.ContactsContract.Data.CONTACT_ID)
+    }
 
-        var ids: [String] = []
-        var seen = Set<String>()
-        if let cursor = cursor {
-            let idIndex = cursor.getColumnIndex(android.provider.ContactsContract.Data.CONTACT_ID)
-            while cursor.moveToNext() {
-                // A single aggregate contact may have multiple raw contacts in the
-                // group, so de-duplicate the resulting contact IDs.
-                let contactID = cursor.getString(idIndex) ?? ""
-                if !contactID.isEmpty && !seen.contains(contactID) {
-                    seen.insert(contactID)
-                    ids.append(contactID)
-                }
-            }
-            cursor.close()
-        }
-        return ids
+    /// Returns the distinct aggregate contact IDs that have a phone number matching the given value.
+    private func androidContactIDsMatchingPhone(resolver: android.content.ContentResolver, number: String) -> [String] {
+        // The phone-lookup filter URI normalizes numbers and matches accordingly.
+        let uri = android.net.Uri.withAppendedPath(
+            android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_FILTER_URI,
+            android.net.Uri.encode(number)
+        )
+        let cursor = resolver.query(
+            uri,
+            [android.provider.ContactsContract.Data.CONTACT_ID].toList().toTypedArray(),
+            nil, nil, nil
+        )
+        return collectDistinctStrings(cursor: cursor, columnName: android.provider.ContactsContract.Data.CONTACT_ID)
+    }
+
+    /// Returns the distinct aggregate contact IDs that have an email address matching the given value.
+    private func androidContactIDsMatchingEmail(resolver: android.content.ContentResolver, email: String) -> [String] {
+        let uri = android.net.Uri.withAppendedPath(
+            android.provider.ContactsContract.CommonDataKinds.Email.CONTENT_FILTER_URI,
+            android.net.Uri.encode(email)
+        )
+        let cursor = resolver.query(
+            uri,
+            [android.provider.ContactsContract.Data.CONTACT_ID].toList().toTypedArray(),
+            nil, nil, nil
+        )
+        return collectDistinctStrings(cursor: cursor, columnName: android.provider.ContactsContract.Data.CONTACT_ID)
     }
 
     private func loadAndroidContactDetails(resolver: android.content.ContentResolver, contact: Contact, contactID: String, includeImages: Bool, includeNote: Bool) {
