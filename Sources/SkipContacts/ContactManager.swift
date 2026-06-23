@@ -84,10 +84,22 @@ public final class ContactManager {
     }
 
     /// Fetch a single contact by ID.
-    public func getContact(id: String, includeImages: Bool = false, includeNote: Bool = true) throws -> Contact? {
+    ///
+    /// Note: requesting the note field (`includeNote: true`) requires the
+    /// `com.apple.developer.contacts.notes` entitlement on iOS.
+    public func getContact(id: String, includeImages: Bool = false, includeNote: Bool = false) throws -> Contact? {
         let options = ContactFetchOptions(contactIDs: [id], includeImages: includeImages, includeNote: includeNote)
         let result = try getContacts(options: options)
         return result.contacts.first
+    }
+
+    /// Fetch all contacts that are members of the group with the given identifier.
+    ///
+    /// Note: requesting the note field (`includeNote: true`) requires the
+    /// `com.apple.developer.contacts.notes` entitlement on iOS.
+    public func getContacts(inGroup groupID: String, includeImages: Bool = false, includeNote: Bool = false) throws -> [Contact] {
+        let options = ContactFetchOptions(groupID: groupID, includeImages: includeImages, includeNote: includeNote)
+        return try getContacts(options: options).contacts
     }
 
     /// Check whether any contacts exist in the database.
@@ -246,6 +258,10 @@ extension ContactManager {
 
         if let ids = options.contactIDs {
             let predicate = CNContact.predicateForContacts(withIdentifiers: ids)
+            let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
+            contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
+        } else if let groupID = options.groupID, !groupID.isEmpty {
+            let predicate = CNContact.predicateForContactsInGroup(withIdentifier: groupID)
             let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
             contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
         } else if let name = options.nameFilter, !name.isEmpty {
@@ -474,7 +490,11 @@ extension ContactManager {
             CNLabeledValue(label: rel.customLabel ?? rel.label.cnLabelValue, value: CNContactRelation(name: rel.name))
         }
 
-        mutable.note = contact.note
+        // Writing the note field requires the `com.apple.developer.contacts.notes`
+        // entitlement on iOS, so only touch it when a note is actually provided.
+        if !contact.note.isEmpty {
+            mutable.note = contact.note
+        }
 
         if let img = contact.image {
             mutable.imageData = img.imageData
@@ -495,7 +515,10 @@ extension ContactManager {
         guard let contactID = contact.id else {
             throw ContactError.invalidData("Contact must have an id to update")
         }
-        let keys = keysToFetch(options: ContactFetchOptions(includeImages: true, includeNote: true))
+        // Only fetch the restricted note key when the update actually carries a
+        // note to write; otherwise the fetch would require the
+        // `com.apple.developer.contacts.notes` entitlement for every update.
+        let keys = keysToFetch(options: ContactFetchOptions(includeImages: true, includeNote: !contact.note.isEmpty))
         let cnContact = try contactStore.unifiedContact(withIdentifier: contactID, keysToFetch: keys)
         let mutable = cnContact.mutableCopy() as! CNMutableContact
         applyCNContactProperties(contact, to: mutable)
@@ -601,6 +624,16 @@ extension ContactManager {
             let placeholders = ids.map { _ in "?" }.joined(separator: ",")
             selection = "\(android.provider.ContactsContract.Contacts._ID) IN (\(placeholders))"
             selectionArgs = ids
+        } else if let groupID = options.groupID, !groupID.isEmpty {
+            // Resolve the aggregate contact IDs that are members of the group,
+            // then constrain the Contacts query to those IDs.
+            let memberIDs = androidContactIDsInGroup(resolver: resolver, groupID: groupID)
+            if memberIDs.isEmpty {
+                return ContactFetchResult(contacts: [], hasNextPage: false)
+            }
+            let placeholders = memberIDs.map { _ in "?" }.joined(separator: ",")
+            selection = "\(android.provider.ContactsContract.Contacts._ID) IN (\(placeholders))"
+            selectionArgs = memberIDs
         } else if let name = options.nameFilter, !name.isEmpty {
             selection = "\(android.provider.ContactsContract.Contacts.DISPLAY_NAME_PRIMARY) LIKE ?"
             selectionArgs = ["%\(name)%"]
@@ -667,6 +700,38 @@ extension ContactManager {
         }
 
         return ContactFetchResult(contacts: contacts, hasNextPage: false)
+    }
+
+    /// Returns the distinct aggregate contact IDs that belong to the group with the given identifier.
+    private func androidContactIDsInGroup(resolver: android.content.ContentResolver, groupID: String) -> [String] {
+        let dataUri = android.provider.ContactsContract.Data.CONTENT_URI
+        let selection = "\(android.provider.ContactsContract.Data.MIMETYPE) = ? AND \(android.provider.ContactsContract.CommonDataKinds.GroupMembership.GROUP_ROW_ID) = ?"
+        let args = [android.provider.ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE, groupID]
+
+        let cursor = resolver.query(
+            dataUri,
+            [android.provider.ContactsContract.Data.CONTACT_ID].toList().toTypedArray(),
+            selection,
+            args.toList().toTypedArray(),
+            nil
+        )
+
+        var ids: [String] = []
+        var seen = Set<String>()
+        if let cursor = cursor {
+            let idIndex = cursor.getColumnIndex(android.provider.ContactsContract.Data.CONTACT_ID)
+            while cursor.moveToNext() {
+                // A single aggregate contact may have multiple raw contacts in the
+                // group, so de-duplicate the resulting contact IDs.
+                let contactID = cursor.getString(idIndex) ?? ""
+                if !contactID.isEmpty && !seen.contains(contactID) {
+                    seen.insert(contactID)
+                    ids.append(contactID)
+                }
+            }
+            cursor.close()
+        }
+        return ids
     }
 
     private func loadAndroidContactDetails(resolver: android.content.ContentResolver, contact: Contact, contactID: String, includeImages: Bool, includeNote: Bool) {

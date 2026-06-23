@@ -39,6 +39,31 @@ Or in your `.xcconfig`:
 INFOPLIST_KEY_NSContactsUsageDescription = This app needs access to your contacts.
 ```
 
+#### Reading contact notes (restricted)
+
+The contact **note** field is restricted by Apple. Reading it requires the special
+`com.apple.developer.contacts.notes` entitlement, which you must
+[request from and be approved by Apple](https://developer.apple.com/contact/request/contact-note-field).
+Fetching a contact with the note key in `keysToFetch` while the app lacks this
+entitlement will fail.
+
+Because most apps do not have this entitlement, all fetch APIs in SkipContacts
+**default to `includeNote: false`** so they work out of the box. Notes are only
+read when you explicitly opt in:
+
+```swift
+// Default — does not touch the restricted note field, no entitlement needed
+let contact = try manager.getContact(id: contactID)
+
+// Opt in — only works if your app has the com.apple.developer.contacts.notes entitlement
+let withNote = try manager.getContact(id: contactID, includeNote: true)
+```
+
+Writing the note field (setting `Contact.note` to a non-empty value before
+`createContact`/`updateContact`) likewise requires the entitlement. If your app
+does not have it, leave `Contact.note` empty. This restriction is iOS-only; on
+Android the note is read and written normally.
+
 ### Android
 
 Add the following permissions to your `AndroidManifest.xml` (or the test target's `Skip/AndroidManifest.xml`):
@@ -101,7 +126,7 @@ let options = ContactFetchOptions(
     pageOffset: 0,
     sortOrder: .givenName,
     includeImages: true,
-    includeNote: true
+    includeNote: false // requires the com.apple.developer.contacts.notes entitlement on iOS
 )
 let result = try manager.getContacts(options: options)
 
@@ -126,6 +151,33 @@ if let contact = try manager.getContact(id: contactID, includeImages: true) {
     print(contact.familyName)
 }
 ```
+
+### Fetch all contacts in a group
+
+Pass a group identifier (see [Contact Groups](#contact-groups)) to retrieve every
+contact that is a member of that group:
+
+```swift
+let contacts = try manager.getContacts(inGroup: groupID)
+for contact in contacts {
+    print(contact.displayName)
+}
+```
+
+The same filter is available on `ContactFetchOptions` via `groupID`, so it can be
+combined with sorting, pagination, and image/note inclusion:
+
+```swift
+let options = ContactFetchOptions(
+    groupID: groupID,
+    sortOrder: .familyName,
+    includeImages: true
+)
+let result = try manager.getContacts(options: options)
+```
+
+> Note: `groupID` takes precedence over `nameFilter`; to filter by both, fetch the
+> group members and filter the results in Swift.
 
 ### Check if contacts exist
 
@@ -209,6 +261,9 @@ let groupID = try manager.createGroup(name: "Book Club")
 
 // Add a contact to a group
 try manager.addContactToGroup(contactID: contactID, groupID: groupID)
+
+// List all contacts in a group
+let members = try manager.getContacts(inGroup: groupID)
 
 // Remove a contact from a group
 try manager.removeContactFromGroup(contactID: contactID, groupID: groupID)

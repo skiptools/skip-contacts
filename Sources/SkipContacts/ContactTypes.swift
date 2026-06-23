@@ -597,6 +597,8 @@ public final class ContactFetchOptions {
     public var nameFilter: String?
     /// Filter contacts by specific IDs.
     public var contactIDs: [String]?
+    /// Filter contacts by membership in the group with this identifier.
+    public var groupID: String?
     /// Maximum number of results.
     public var pageSize: Int?
     /// Offset for pagination.
@@ -605,20 +607,27 @@ public final class ContactFetchOptions {
     public var sortOrder: ContactSortOrder
     /// Whether to include image data in results.
     public var includeImages: Bool
-    /// Whether to include note field.
+    /// Whether to include the note field. Defaults to `false`.
+    ///
+    /// On iOS, reading the note field requires the special
+    /// `com.apple.developer.contacts.notes` entitlement, which must be requested
+    /// from and approved by Apple. Without it, fetches that request notes will
+    /// fail. See the README for details.
     public var includeNote: Bool
 
     public init(
         nameFilter: String? = nil,
         contactIDs: [String]? = nil,
+        groupID: String? = nil,
         pageSize: Int? = nil,
         pageOffset: Int? = nil,
         sortOrder: ContactSortOrder = .none,
         includeImages: Bool = false,
-        includeNote: Bool = true
+        includeNote: Bool = false
     ) {
         self.nameFilter = nameFilter
         self.contactIDs = contactIDs
+        self.groupID = groupID
         self.pageSize = pageSize
         self.pageOffset = pageOffset
         self.sortOrder = sortOrder

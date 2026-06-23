@@ -271,11 +271,12 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         let options = ContactFetchOptions()
         #expect(options.nameFilter == nil)
         #expect(options.contactIDs == nil)
+        #expect(options.groupID == nil)
         #expect(options.pageSize == nil)
         #expect(options.pageOffset == nil)
         #expect(options.sortOrder == .none)
         #expect(options.includeImages == false)
-        #expect(options.includeNote == true)
+        #expect(options.includeNote == false)
     }
 
     @Test func testFetchOptionsCustom() throws {
@@ -293,6 +294,13 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(options.sortOrder == .givenName)
         #expect(options.includeImages == true)
         #expect(options.includeNote == false)
+    }
+
+    @Test func testFetchOptionsGroupFilter() throws {
+        let options = ContactFetchOptions(groupID: "group-42")
+        #expect(options.groupID == "group-42")
+        #expect(options.nameFilter == nil)
+        #expect(options.contactIDs == nil)
     }
 
     // MARK: - Fetch Result
@@ -732,6 +740,53 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
         try manager.deleteGroup(id: groupID)
     }
 
+    @Test func testFetchContactsInGroup() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let memberName = "SkipGrpMember\(Int.random(in: 10000..<99999))"
+        let member = Contact(givenName: memberName, familyName: "InGroup")
+        let nonMember = Contact(givenName: "SkipGrpOutsider\(Int.random(in: 10000..<99999))", familyName: "NotInGroup")
+        let memberID = try manager.createContact(member)
+        let nonMemberID = try manager.createContact(nonMember)
+        let groupName = "SkipFetchGrp\(Int.random(in: 10000..<99999))"
+        let groupID = try manager.createGroup(name: groupName)
+
+        func cleanup() {
+            try? manager.deleteContact(id: memberID)
+            try? manager.deleteContact(id: nonMemberID)
+            try? manager.deleteGroup(id: groupID)
+        }
+
+        do {
+            // An empty group should yield no members.
+            let empty = try manager.getContacts(inGroup: groupID)
+            #expect(empty.isEmpty)
+
+            try manager.addContactToGroup(contactID: memberID, groupID: groupID)
+
+            // The group should now contain exactly the member, not the outsider.
+            let members = try manager.getContacts(inGroup: groupID)
+            #expect(members.contains { $0.givenName == memberName })
+            #expect(!members.contains { $0.familyName == "NotInGroup" })
+
+            // The same query is also reachable via the options API.
+            let viaOptions = try manager.getContacts(options: ContactFetchOptions(groupID: groupID))
+            #expect(viaOptions.contacts.contains { $0.givenName == memberName })
+
+            try manager.removeContactFromGroup(contactID: memberID, groupID: groupID)
+
+            // After removal the group is empty again.
+            let afterRemoval = try manager.getContacts(inGroup: groupID)
+            #expect(!afterRemoval.contains { $0.givenName == memberName })
+        } catch {
+            cleanup()
+            throw error
+        }
+
+        cleanup()
+    }
+
     // MARK: - Containers
 
     @Test func testGetContainers() throws {
@@ -811,7 +866,7 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
             )
         ]
         contact.urlAddresses = [
-            ContactURLAddress(label: .homepage, value: "https://skip.tools")
+            ContactURLAddress(label: .homepage, value: "https://skip.dev")
         ]
         contact.note = "Integration test complex contact"
 
