@@ -272,6 +272,42 @@ if var contact = try manager.getContact(id: contactID) {
 try manager.deleteContact(id: contactID)
 ```
 
+## Batch Operations
+
+Create, update, or delete many contacts at once. This is far more efficient than
+issuing one call per contact: on iOS the whole batch is committed as a single
+`CNSaveRequest`, and on Android as a single `ContentResolver.applyBatch`
+transaction.
+
+```swift
+// Create many contacts; returns the new identifiers in input order
+let newIDs = try manager.createContacts([
+    Contact(givenName: "Ada", familyName: "Lovelace"),
+    Contact(givenName: "Alan", familyName: "Turing"),
+    Contact(givenName: "Grace", familyName: "Hopper")
+])
+
+// Update many contacts (each must have a valid `id`)
+let edits = newIDs.map { id in
+    let c = Contact(id: id, givenName: "Updated", familyName: "Name")
+    return c
+}
+try manager.updateContacts(edits)
+
+// Delete many contacts by ID
+try manager.deleteContacts(ids: newIDs)
+```
+
+Empty arrays are a no-op (and don't require contacts permission). The return value
+of `createContacts` is `@discardableResult`, so it can be ignored when the new
+identifiers aren't needed.
+
+> Note: On Android, updating is implemented as delete-and-recreate, so
+> `updateContacts` is applied per contact rather than as a single transaction, and
+> the recreated contacts receive new identifiers. iOS commits all updates in one
+> request. `createContacts` and `deleteContacts` are single transactions on both
+> platforms.
+
 ## Contact Groups
 
 ```swift
