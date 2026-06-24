@@ -334,6 +334,18 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(result.hasNextPage == false)
     }
 
+    // MARK: - Batch (empty no-op)
+
+    @Test func testBatchEmptyNoOp() throws {
+        // Empty batches short-circuit before touching the contacts store, so they
+        // are safe to run on any platform without permissions.
+        let manager = ContactManager.shared
+        let created = try manager.createContacts([])
+        #expect(created.isEmpty)
+        try manager.updateContacts([])
+        try manager.deleteContacts(ids: [])
+    }
+
     // MARK: - Editor Options
 
     @Test func testEditorOptionsDefaults() throws {
@@ -757,6 +769,83 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
         // Verify it no longer exists
         let after = try manager.getContact(id: id)
         #expect(after == nil)
+    }
+
+    // MARK: - Batch Create / Update / Delete
+
+    @Test func testBatchCreateAndDelete() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let tag = "SkipBatch\(Int.random(in: 10000..<99999))"
+        let contacts = [
+            Contact(givenName: "\(tag)A", familyName: "BatchCreate"),
+            Contact(givenName: "\(tag)B", familyName: "BatchCreate"),
+            Contact(givenName: "\(tag)C", familyName: "BatchCreate")
+        ]
+
+        let ids = try manager.createContacts(contacts)
+        do {
+            #expect(ids.count == 3)
+            for id in ids {
+                let fetched = try manager.getContact(id: id)
+                #expect(fetched != nil)
+            }
+        } catch {
+            try? manager.deleteContacts(ids: ids)
+            throw error
+        }
+
+        // Delete them all in one batch and confirm they are gone.
+        try manager.deleteContacts(ids: ids)
+        for id in ids {
+            let after = try manager.getContact(id: id)
+            #expect(after == nil)
+        }
+    }
+
+    @Test func testBatchUpdate() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let tagA = "SkipBUpdA\(Int.random(in: 10000..<99999))"
+        let tagB = "SkipBUpdB\(Int.random(in: 10000..<99999))"
+        let ids = try manager.createContacts([
+            Contact(givenName: tagA, familyName: "Before"),
+            Contact(givenName: tagB, familyName: "Before")
+        ])
+
+        var caught: Error? = nil
+        do {
+            try manager.updateContacts([
+                Contact(id: ids[0], givenName: tagA, familyName: "After"),
+                Contact(id: ids[1], givenName: tagB, familyName: "After")
+            ])
+
+            // Android's update changes IDs, so look up by the unique given names.
+            for tag in [tagA, tagB] {
+                let result = try manager.getContacts(options: ContactFetchOptions(nameFilter: tag))
+                let match = result.contacts.first { $0.givenName == tag }
+                #expect(match?.familyName == "After")
+            }
+        } catch {
+            caught = error
+        }
+
+        // Clean up by current name, since IDs may have changed on Android.
+        for tag in [tagA, tagB] {
+            if let result = try? manager.getContacts(options: ContactFetchOptions(nameFilter: tag)) {
+                for c in result.contacts where c.givenName == tag {
+                    if let cid = c.id {
+                        try? manager.deleteContact(id: cid)
+                    }
+                }
+            }
+        }
+
+        if let caught = caught {
+            throw caught
+        }
     }
 
     // MARK: - Groups

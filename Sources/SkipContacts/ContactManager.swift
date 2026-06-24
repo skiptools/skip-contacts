@@ -156,6 +156,59 @@ public final class ContactManager {
         #endif
     }
 
+    // MARK: - Batch Create, Update, Delete
+
+    /// Create multiple contacts in a single batch operation.
+    ///
+    /// Returns the new identifiers, in the same order as the input contacts.
+    /// On iOS the whole batch is committed as a single `CNSaveRequest`; on Android
+    /// it is committed as a single `ContentResolver.applyBatch` transaction.
+    @discardableResult
+    public func createContacts(_ contacts: [Contact]) throws -> [String] {
+        if contacts.isEmpty {
+            return []
+        }
+        #if !SKIP
+        return try createAppleContacts(contacts)
+        #else
+        return try createAndroidContacts(contacts)
+        #endif
+    }
+
+    /// Update multiple existing contacts. Every contact must have a valid `id`.
+    ///
+    /// On iOS the updates are committed as a single `CNSaveRequest`. On Android,
+    /// where updating is implemented as delete-and-recreate, each contact is
+    /// updated individually (so the operation is not a single transaction and the
+    /// contacts' identifiers may change).
+    public func updateContacts(_ contacts: [Contact]) throws {
+        if contacts.isEmpty {
+            return
+        }
+        for contact in contacts {
+            if contact.id == nil {
+                throw ContactError.invalidData("Contact must have an id to update")
+            }
+        }
+        #if !SKIP
+        try updateAppleContacts(contacts)
+        #else
+        try updateAndroidContacts(contacts)
+        #endif
+    }
+
+    /// Delete multiple contacts by ID in a single batch operation.
+    public func deleteContacts(ids: [String]) throws {
+        if ids.isEmpty {
+            return
+        }
+        #if !SKIP
+        try deleteAppleContacts(ids: ids)
+        #else
+        try deleteAndroidContacts(ids: ids)
+        #endif
+    }
+
     // MARK: - Groups
 
     /// Get all contact groups.
@@ -526,39 +579,56 @@ extension ContactManager {
     }
 
     private func createAppleContact(_ contact: Contact) throws -> String {
-        let mutable = CNMutableContact()
-        applyCNContactProperties(contact, to: mutable)
+        return try createAppleContacts([contact])[0]
+    }
 
+    private func createAppleContacts(_ contacts: [Contact]) throws -> [String] {
         let request = CNSaveRequest()
-        request.add(mutable, toContainerWithIdentifier: nil)
+        var mutables: [CNMutableContact] = []
+        for contact in contacts {
+            let mutable = CNMutableContact()
+            applyCNContactProperties(contact, to: mutable)
+            request.add(mutable, toContainerWithIdentifier: nil)
+            mutables.append(mutable)
+        }
         try contactStore.execute(request)
-        return mutable.identifier
+        return mutables.map { $0.identifier }
     }
 
     private func updateAppleContact(_ contact: Contact) throws {
-        guard let contactID = contact.id else {
-            throw ContactError.invalidData("Contact must have an id to update")
-        }
-        // Only fetch the restricted note key when the update actually carries a
-        // note to write; otherwise the fetch would require the
-        // `com.apple.developer.contacts.notes` entitlement for every update.
-        let keys = keysToFetch(options: ContactFetchOptions(includeImages: true, includeNote: !contact.note.isEmpty))
-        let cnContact = try contactStore.unifiedContact(withIdentifier: contactID, keysToFetch: keys)
-        let mutable = cnContact.mutableCopy() as! CNMutableContact
-        applyCNContactProperties(contact, to: mutable)
+        try updateAppleContacts([contact])
+    }
 
+    private func updateAppleContacts(_ contacts: [Contact]) throws {
         let request = CNSaveRequest()
-        request.update(mutable)
+        for contact in contacts {
+            guard let contactID = contact.id else {
+                throw ContactError.invalidData("Contact must have an id to update")
+            }
+            // Only fetch the restricted note key when the update actually carries a
+            // note to write; otherwise the fetch would require the
+            // `com.apple.developer.contacts.notes` entitlement for every update.
+            let keys = keysToFetch(options: ContactFetchOptions(includeImages: true, includeNote: !contact.note.isEmpty))
+            let cnContact = try contactStore.unifiedContact(withIdentifier: contactID, keysToFetch: keys)
+            let mutable = cnContact.mutableCopy() as! CNMutableContact
+            applyCNContactProperties(contact, to: mutable)
+            request.update(mutable)
+        }
         try contactStore.execute(request)
     }
 
     private func deleteAppleContact(id: String) throws {
-        let keys: [CNKeyDescriptor] = [CNContactIdentifierKey as CNKeyDescriptor]
-        let cnContact = try contactStore.unifiedContact(withIdentifier: id, keysToFetch: keys)
-        let mutable = cnContact.mutableCopy() as! CNMutableContact
+        try deleteAppleContacts(ids: [id])
+    }
 
+    private func deleteAppleContacts(ids: [String]) throws {
+        let keys: [CNKeyDescriptor] = [CNContactIdentifierKey as CNKeyDescriptor]
         let request = CNSaveRequest()
-        request.delete(mutable)
+        for id in ids {
+            let cnContact = try contactStore.unifiedContact(withIdentifier: id, keysToFetch: keys)
+            let mutable = cnContact.mutableCopy() as! CNMutableContact
+            request.delete(mutable)
+        }
         try contactStore.execute(request)
     }
 
@@ -933,22 +1003,51 @@ extension ContactManager {
     }
 
     private func createAndroidContact(_ contact: Contact) throws -> String {
+        return try createAndroidContacts([contact])[0]
+    }
+
+    private func createAndroidContacts(_ contacts: [Contact]) throws -> [String] {
         let context = ProcessInfo.processInfo.androidContext
         let resolver = context.getContentResolver()
 
         let ops = java.util.ArrayList<android.content.ContentProviderOperation>()
+        var rawContactIndices: [Int] = []
 
-        // Insert raw contact
-        ops.add(
-            android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.RawContacts.CONTENT_URI)
-                .withValue(android.provider.ContactsContract.RawContacts.ACCOUNT_TYPE, nil)
-                .withValue(android.provider.ContactsContract.RawContacts.ACCOUNT_NAME, nil)
-                .build()
-        )
+        for contact in contacts {
+            // The index of this contact's raw-contact insert; all of the contact's
+            // data operations back-reference this position in the batch.
+            let rawContactIndex = ops.size
+            rawContactIndices.append(rawContactIndex)
 
+            // Insert raw contact
+            ops.add(
+                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.RawContacts.CONTENT_URI)
+                    .withValue(android.provider.ContactsContract.RawContacts.ACCOUNT_TYPE, nil)
+                    .withValue(android.provider.ContactsContract.RawContacts.ACCOUNT_NAME, nil)
+                    .build()
+            )
+            appendAndroidContactDataOps(ops: ops, contact: contact, rawContactIndex: rawContactIndex)
+        }
+
+        let results = resolver.applyBatch(android.provider.ContactsContract.AUTHORITY, ops)
+
+        var ids: [String] = []
+        for rawContactIndex in rawContactIndices {
+            let rawContactUri = results[rawContactIndex].uri
+            guard let contactID = resolveAndroidAggregateContactID(resolver: resolver, rawContactUri: rawContactUri) else {
+                throw ContactError.saveFailed("Failed to create contact")
+            }
+            ids.append(contactID)
+        }
+        return ids
+    }
+
+    /// Appends the data-row insert operations for a contact to the batch, each
+    /// back-referencing the raw-contact insert operation at `rawContactIndex`.
+    private func appendAndroidContactDataOps(ops: java.util.ArrayList<android.content.ContentProviderOperation>, contact: Contact, rawContactIndex: Int) {
         // Name
         let nameOp = android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-            .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+            .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
             .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
             .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PREFIX, contact.namePrefix)
             .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME, contact.givenName)
@@ -965,7 +1064,7 @@ extension ContactManager {
         for phone in contact.phoneNumbers {
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER, phone.value)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Phone.TYPE, labelToAndroidPhoneType(phone.label))
@@ -977,7 +1076,7 @@ extension ContactManager {
         for email in contact.emailAddresses {
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Email.ADDRESS, email.value)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Email.TYPE, labelToAndroidEmailType(email.label))
@@ -989,7 +1088,7 @@ extension ContactManager {
         for addr in contact.postalAddresses {
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.STREET, addr.street)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CITY, addr.city)
@@ -1005,7 +1104,7 @@ extension ContactManager {
         if !contact.organizationName.isEmpty || !contact.jobTitle.isEmpty || !contact.departmentName.isEmpty {
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Organization.COMPANY, contact.organizationName)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Organization.DEPARTMENT, contact.departmentName)
@@ -1018,7 +1117,7 @@ extension ContactManager {
         for url in contact.urlAddresses {
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Website.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Website.URL, url.value)
                     .build()
@@ -1029,7 +1128,7 @@ extension ContactManager {
         if !contact.note.isEmpty {
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Note.NOTE, contact.note)
                     .build()
@@ -1041,7 +1140,7 @@ extension ContactManager {
             let dateStr = formatAndroidDateString(day: bday.day, month: bday.month, year: bday.year)
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Event.START_DATE, dateStr)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Event.TYPE, android.provider.ContactsContract.CommonDataKinds.Event.TYPE_BIRTHDAY)
@@ -1053,7 +1152,7 @@ extension ContactManager {
         for rel in contact.relationships {
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Relation.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Relation.NAME, rel.name)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Relation.TYPE, labelToAndroidRelationType(rel.label))
@@ -1065,102 +1164,89 @@ extension ContactManager {
         if !contact.nickname.isEmpty {
             ops.add(
                 android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, 0)
+                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Nickname.NAME, contact.nickname)
                     .build()
             )
         }
 
-        let results = resolver.applyBatch(android.provider.ContactsContract.AUTHORITY, ops)
-        let rawContactUri = results[0].uri
-        if let rawContactUri = rawContactUri {
-            let rawContactID = android.content.ContentUris.parseId(rawContactUri)
-            // Look up the aggregate contact ID from the raw contact
-            let contactIDCursor = resolver.query(
-                android.provider.ContactsContract.RawContacts.CONTENT_URI,
-                [android.provider.ContactsContract.RawContacts.CONTACT_ID].toList().toTypedArray(),
-                "\(android.provider.ContactsContract.RawContacts._ID) = ?",
-                ["\(rawContactID)"].toList().toTypedArray(),
-                nil
-            )
-            if let contactIDCursor = contactIDCursor {
-                if contactIDCursor.moveToFirst() {
-                    let contactID = contactIDCursor.getString(0) ?? "\(rawContactID)"
-                    contactIDCursor.close()
-                    return contactID
-                }
-                contactIDCursor.close()
-            }
-            return "\(rawContactID)"
+    }
+
+    /// Resolves the aggregate contact ID from a freshly inserted raw-contact URI.
+    private func resolveAndroidAggregateContactID(resolver: android.content.ContentResolver, rawContactUri: android.net.Uri?) -> String? {
+        guard let rawContactUri = rawContactUri else {
+            return nil
         }
-        throw ContactError.saveFailed("Failed to create contact")
+        let rawContactID = android.content.ContentUris.parseId(rawContactUri)
+        let cursor = resolver.query(
+            android.provider.ContactsContract.RawContacts.CONTENT_URI,
+            [android.provider.ContactsContract.RawContacts.CONTACT_ID].toList().toTypedArray(),
+            "\(android.provider.ContactsContract.RawContacts._ID) = ?",
+            ["\(rawContactID)"].toList().toTypedArray(),
+            nil
+        )
+        var contactID = "\(rawContactID)"
+        if let cursor = cursor {
+            if cursor.moveToFirst() {
+                contactID = cursor.getString(0) ?? "\(rawContactID)"
+            }
+            cursor.close()
+        }
+        return contactID
     }
 
     private func updateAndroidContact(_ contact: Contact) throws {
-        guard let contactID = contact.id else {
-            throw ContactError.invalidData("Contact must have an id to update")
-        }
+        try updateAndroidContacts([contact])
+    }
 
-        // Delete and recreate is the simplest reliable approach for Android
-        try deleteAndroidContact(id: contactID)
-        let newContact = Contact(
-            contactType: contact.contactType,
-            namePrefix: contact.namePrefix,
-            givenName: contact.givenName,
-            middleName: contact.middleName,
-            familyName: contact.familyName,
-            nameSuffix: contact.nameSuffix,
-            nickname: contact.nickname,
-            phoneticGivenName: contact.phoneticGivenName,
-            phoneticMiddleName: contact.phoneticMiddleName,
-            phoneticFamilyName: contact.phoneticFamilyName,
-            previousFamilyName: contact.previousFamilyName,
-            organizationName: contact.organizationName,
-            departmentName: contact.departmentName,
-            jobTitle: contact.jobTitle,
-            phoneNumbers: contact.phoneNumbers,
-            emailAddresses: contact.emailAddresses,
-            postalAddresses: contact.postalAddresses,
-            urlAddresses: contact.urlAddresses,
-            instantMessageAddresses: contact.instantMessageAddresses,
-            socialProfiles: contact.socialProfiles,
-            birthday: contact.birthday,
-            dates: contact.dates,
-            relationships: contact.relationships,
-            note: contact.note,
-            image: contact.image
-        )
-        let _ = try createAndroidContact(newContact)
+    private func updateAndroidContacts(_ contacts: [Contact]) throws {
+        // Android has no in-place update, so each contact is deleted and recreated.
+        // This is performed per contact rather than as a single transaction, and
+        // the recreated contacts receive new identifiers. `createAndroidContact`
+        // ignores the contact's existing `id`, so the value can be passed as-is.
+        for contact in contacts {
+            guard let contactID = contact.id else {
+                throw ContactError.invalidData("Contact must have an id to update")
+            }
+            try deleteAndroidContact(id: contactID)
+            let _ = try createAndroidContact(contact)
+        }
     }
 
     private func deleteAndroidContact(id: String) throws {
+        try deleteAndroidContacts(ids: [id])
+    }
+
+    private func deleteAndroidContacts(ids: [String]) throws {
         let context = ProcessInfo.processInfo.androidContext
         let resolver = context.getContentResolver()
 
-        // Look up raw contact IDs for this contact
-        let rawCursor = resolver.query(
+        let ops = java.util.ArrayList<android.content.ContentProviderOperation>()
+        for id in ids {
+            // Delete every raw contact that aggregates into this contact.
+            for rawID in androidRawContactIDs(resolver: resolver, contactID: id) {
+                let rawUri = android.content.ContentUris.withAppendedId(android.provider.ContactsContract.RawContacts.CONTENT_URI, java.lang.Long.parseLong(rawID))
+                ops.add(android.content.ContentProviderOperation.newDelete(rawUri).build())
+            }
+        }
+
+        if ops.size == 0 {
+            throw ContactError.contactNotFound
+        }
+        let _ = resolver.applyBatch(android.provider.ContactsContract.AUTHORITY, ops)
+    }
+
+    /// Returns the raw-contact IDs that make up the aggregate contact with the given ID.
+    private func androidRawContactIDs(resolver: android.content.ContentResolver, contactID: String) -> [String] {
+        let cursor = resolver.query(
             android.provider.ContactsContract.RawContacts.CONTENT_URI,
             [android.provider.ContactsContract.RawContacts._ID].toList().toTypedArray(),
             "\(android.provider.ContactsContract.RawContacts.CONTACT_ID) = ?",
-            [id].toList().toTypedArray(),
+            [contactID].toList().toTypedArray(),
             nil
         )
-
-        var deleted = false
-        if let rawCursor = rawCursor {
-            while rawCursor.moveToNext() {
-                let rawID = rawCursor.getString(0) ?? ""
-                let rawUri = android.content.ContentUris.withAppendedId(android.provider.ContactsContract.RawContacts.CONTENT_URI, java.lang.Long.parseLong(rawID))
-                resolver.delete(rawUri, nil, nil)
-                deleted = true
-            }
-            rawCursor.close()
-        }
-
-        if !deleted {
-            throw ContactError.contactNotFound
-        }
+        return collectDistinctStrings(cursor: cursor, columnName: android.provider.ContactsContract.RawContacts._ID)
     }
 
     private func getAndroidGroups() throws -> [ContactGroup] {
