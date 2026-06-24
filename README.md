@@ -47,16 +47,17 @@ The contact **note** field is restricted by Apple. Reading it requires the speci
 Fetching a contact with the note key in `keysToFetch` while the app lacks this
 entitlement will fail.
 
-Because most apps do not have this entitlement, all fetch APIs in SkipContacts
-**default to `includeNote: false`** so they work out of the box. Notes are only
-read when you explicitly opt in:
+Because most apps do not have this entitlement, the `note` field is **excluded
+from the default field set** (`.all`) so fetches work out of the box. Notes are
+only read when you explicitly request the `.note` field (see
+[Selecting fields to fetch](#selecting-fields-to-fetch)):
 
 ```swift
-// Default — does not touch the restricted note field, no entitlement needed
+// Default (.all) — does not touch the restricted note field, no entitlement needed
 let contact = try manager.getContact(id: contactID)
 
 // Opt in — only works if your app has the com.apple.developer.contacts.notes entitlement
-let withNote = try manager.getContact(id: contactID, includeNote: true)
+let withNote = try manager.getContact(id: contactID, fields: .everything)
 ```
 
 Writing the note field (setting `Contact.note` to a non-empty value before
@@ -125,8 +126,7 @@ let options = ContactFetchOptions(
     pageSize: 20,
     pageOffset: 0,
     sortOrder: .givenName,
-    includeImages: true,
-    includeNote: false // requires the com.apple.developer.contacts.notes entitlement on iOS
+    fields: .all // every field except the restricted note; see "Selecting fields to fetch"
 )
 let result = try manager.getContacts(options: options)
 
@@ -145,11 +145,14 @@ if result.hasNextPage {
 ### Fetch a single contact by ID
 
 ```swift
-if let contact = try manager.getContact(id: contactID, includeImages: true) {
+if let contact = try manager.getContact(id: contactID) {
     print(contact.displayName)
     print(contact.givenName)
     print(contact.familyName)
 }
+
+// Fetch only the fields you need (see "Selecting fields to fetch")
+let light = try manager.getContact(id: contactID, fields: .summary)
 ```
 
 ### Fetch all contacts in a group
@@ -165,13 +168,13 @@ for contact in contacts {
 ```
 
 The same filter is available on `ContactFetchOptions` via `groupID`, so it can be
-combined with sorting, pagination, and image/note inclusion:
+combined with sorting, pagination, and field selection:
 
 ```swift
 let options = ContactFetchOptions(
     groupID: groupID,
     sortOrder: .familyName,
-    includeImages: true
+    fields: .summary
 )
 let result = try manager.getContacts(options: options)
 ```
@@ -192,10 +195,10 @@ let byEmail = try manager.getContacts(matchingEmail: "jane@example.com")
 ```
 
 The same filters are available on `ContactFetchOptions` via `phoneNumberFilter` and
-`emailFilter`, so they compose with sorting, pagination, and image/note inclusion:
+`emailFilter`, so they compose with sorting, pagination, and field selection:
 
 ```swift
-let options = ContactFetchOptions(phoneNumberFilter: "+15550123456", includeImages: true)
+let options = ContactFetchOptions(phoneNumberFilter: "+15550123456", fields: .summary)
 let result = try manager.getContacts(options: options)
 ```
 
@@ -209,6 +212,50 @@ let result = try manager.getContacts(options: options)
 ```swift
 let hasAny = try manager.hasContacts()
 ```
+
+### Selecting fields to fetch
+
+By default, fetches populate every field except the entitlement-restricted note.
+When you only need some of the data — for example, name and phone number for a
+list row — request a narrower set of fields with the `ContactFields` option set.
+The platform then loads only the requested keys, which can substantially improve
+performance and reduce memory use on large address books.
+
+```swift
+// Lightweight fetch for a list: name, phone numbers, and email addresses
+let people = try manager.getContacts(options: ContactFetchOptions(fields: .summary))
+
+// A custom set: just names and images
+let withPhotos = try manager.getContacts(options: ContactFetchOptions(fields: ContactFields.name.union(.image)))
+
+// Combine the convenience presets with extra fields
+let everythingPlusNote = ContactFields.all.union(.note) // == .everything
+```
+
+Available fields and presets:
+
+| Field | Contents |
+|-------|----------|
+| `.name` | Prefix, given, middle, family, suffix, nickname, phonetic names |
+| `.phoneNumbers` | Phone numbers |
+| `.emailAddresses` | Email addresses |
+| `.postalAddresses` | Postal addresses |
+| `.organization` | Organization, department, job title |
+| `.urlAddresses` | URL addresses |
+| `.instantMessageAddresses` | Instant message addresses |
+| `.socialProfiles` | Social profiles (read support is iOS-only) |
+| `.dates` | Birthday and other dates |
+| `.relationships` | Relationships |
+| `.image` | Thumbnail and full-size image data |
+| `.note` | Note field — requires the iOS notes entitlement (see above) |
+| `.summary` | `.name`, `.phoneNumbers`, `.emailAddresses` |
+| `.all` | Every field **except** `.note` (the default) |
+| `.everything` | Every field **including** `.note` |
+
+> Note: Unrequested fields are left at their empty defaults on the returned
+> `Contact` (e.g. `postalAddresses` is `[]`, `organizationName` is `""`). On iOS,
+> requesting only the fields you need also avoids fetching keys you may not be
+> entitled to.
 
 ## Creating Contacts
 
