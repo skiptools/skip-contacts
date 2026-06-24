@@ -599,6 +599,13 @@ public final class ContactFetchOptions {
     public var contactIDs: [String]?
     /// Filter contacts by membership in the group with this identifier.
     public var groupID: String?
+    /// Filter contacts to those with a phone number matching this value.
+    ///
+    /// Matching uses the platform's own number normalization, so formatting
+    /// differences are generally ignored.
+    public var phoneNumberFilter: String?
+    /// Filter contacts to those with an email address matching this value.
+    public var emailFilter: String?
     /// Maximum number of results.
     public var pageSize: Int?
     /// Offset for pagination.
@@ -619,6 +626,8 @@ public final class ContactFetchOptions {
         nameFilter: String? = nil,
         contactIDs: [String]? = nil,
         groupID: String? = nil,
+        phoneNumberFilter: String? = nil,
+        emailFilter: String? = nil,
         pageSize: Int? = nil,
         pageOffset: Int? = nil,
         sortOrder: ContactSortOrder = .none,
@@ -628,6 +637,8 @@ public final class ContactFetchOptions {
         self.nameFilter = nameFilter
         self.contactIDs = contactIDs
         self.groupID = groupID
+        self.phoneNumberFilter = phoneNumberFilter
+        self.emailFilter = emailFilter
         self.pageSize = pageSize
         self.pageOffset = pageOffset
         self.sortOrder = sortOrder

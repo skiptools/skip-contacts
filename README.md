@@ -176,8 +176,33 @@ let options = ContactFetchOptions(
 let result = try manager.getContacts(options: options)
 ```
 
-> Note: `groupID` takes precedence over `nameFilter`; to filter by both, fetch the
-> group members and filter the results in Swift.
+### Find contacts by phone number or email
+
+Look up contacts by a phone number or email address. Matching is performed by the
+platform using its own normalization rules, so formatting differences (spaces,
+dashes, parentheses, and — on Android — country-code variations) are generally
+ignored:
+
+```swift
+// By phone number
+let byPhone = try manager.getContacts(matchingPhoneNumber: "+1 (555) 012-3456")
+
+// By email address
+let byEmail = try manager.getContacts(matchingEmail: "jane@example.com")
+```
+
+The same filters are available on `ContactFetchOptions` via `phoneNumberFilter` and
+`emailFilter`, so they compose with sorting, pagination, and image/note inclusion:
+
+```swift
+let options = ContactFetchOptions(phoneNumberFilter: "+15550123456", includeImages: true)
+let result = try manager.getContacts(options: options)
+```
+
+> Note: when more than one filter is set, only the most specific one is applied.
+> The precedence is `contactIDs` → `groupID` → `phoneNumberFilter` → `emailFilter`
+> → `nameFilter`. To combine filters, fetch with one and filter the results in
+> Swift.
 
 ### Check if contacts exist
 

@@ -272,6 +272,8 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(options.nameFilter == nil)
         #expect(options.contactIDs == nil)
         #expect(options.groupID == nil)
+        #expect(options.phoneNumberFilter == nil)
+        #expect(options.emailFilter == nil)
         #expect(options.pageSize == nil)
         #expect(options.pageOffset == nil)
         #expect(options.sortOrder == .none)
@@ -301,6 +303,20 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(options.groupID == "group-42")
         #expect(options.nameFilter == nil)
         #expect(options.contactIDs == nil)
+    }
+
+    @Test func testFetchOptionsPhoneFilter() throws {
+        let options = ContactFetchOptions(phoneNumberFilter: "+1-555-0123")
+        #expect(options.phoneNumberFilter == "+1-555-0123")
+        #expect(options.emailFilter == nil)
+        #expect(options.nameFilter == nil)
+    }
+
+    @Test func testFetchOptionsEmailFilter() throws {
+        let options = ContactFetchOptions(emailFilter: "jane@example.com")
+        #expect(options.emailFilter == "jane@example.com")
+        #expect(options.phoneNumberFilter == nil)
+        #expect(options.nameFilter == nil)
     }
 
     // MARK: - Fetch Result
@@ -637,6 +653,49 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
             #expect(result.contacts.count == 1)
             #expect(result.contacts.first?.givenName == "SkipTest")
         }
+    }
+
+    @Test func testQueryByPhoneNumber() throws {
+        guard isLiveDevice() else { return }
+
+        let suffix = Int.random(in: 1000000..<9999999)
+        let phoneNumber = "+1555\(suffix)"
+        let contact = Contact(givenName: "SkipPhone\(suffix)", familyName: "PhoneQuery")
+        contact.phoneNumbers = [ContactPhoneNumber(label: .mobile, value: phoneNumber)]
+
+        try withTestContact(contact) { id in
+            let matches = try ContactManager.shared.getContacts(matchingPhoneNumber: phoneNumber)
+            #expect(matches.contains { $0.id == id })
+
+            // The same query is reachable through the options API.
+            let viaOptions = try ContactManager.shared.getContacts(options: ContactFetchOptions(phoneNumberFilter: phoneNumber))
+            #expect(viaOptions.contacts.contains { $0.id == id })
+        }
+    }
+
+    @Test func testQueryByEmail() throws {
+        guard isLiveDevice() else { return }
+
+        let suffix = Int.random(in: 10000..<99999)
+        let email = "skipemail\(suffix)@example.test"
+        let contact = Contact(givenName: "SkipEmail\(suffix)", familyName: "EmailQuery")
+        contact.emailAddresses = [ContactEmailAddress(label: .work, value: email)]
+
+        try withTestContact(contact) { id in
+            let matches = try ContactManager.shared.getContacts(matchingEmail: email)
+            #expect(matches.contains { $0.id == id })
+
+            let viaOptions = try ContactManager.shared.getContacts(options: ContactFetchOptions(emailFilter: email))
+            #expect(viaOptions.contacts.contains { $0.id == id })
+        }
+    }
+
+    @Test func testQueryByPhoneNumberNoMatch() throws {
+        guard isLiveDevice() else { return }
+
+        // A number that should not match any real contact in the test database.
+        let matches = try ContactManager.shared.getContacts(matchingPhoneNumber: "+19995550000000")
+        #expect(matches.isEmpty)
     }
 
     @Test func testHasContacts() throws {
