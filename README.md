@@ -302,9 +302,14 @@ let newID = try manager.createContact(contact)
 
 ## Updating Contacts
 
+Always fetch the full contact first, mutate it, then write it back. The update is
+performed in place (the identifier and unmanaged data like group membership are
+preserved), and it replaces the contact's managed fields with what the model
+carries — see [Updating contacts](#updating-contacts) for the full semantics.
+
 ```swift
-// Fetch the contact first
-if var contact = try manager.getContact(id: contactID) {
+// Fetch the contact first (default `.all` fetches every field except the note)
+if let contact = try manager.getContact(id: contactID) {
     contact.jobTitle = "Senior Engineer"
     contact.phoneNumbers.append(
         ContactPhoneNumber(label: .home, value: "+1-555-9999")
@@ -349,11 +354,11 @@ Empty arrays are a no-op (and don't require contacts permission). The return val
 of `createContacts` is `@discardableResult`, so it can be ignored when the new
 identifiers aren't needed.
 
-> Note: On Android, updating is implemented as delete-and-recreate, so
-> `updateContacts` is applied per contact rather than as a single transaction, and
-> the recreated contacts receive new identifiers. iOS commits all updates in one
-> request. `createContacts` and `deleteContacts` are single transactions on both
-> platforms.
+> Note: All three batch operations are committed as a single transaction on both
+> platforms (one `CNSaveRequest` on iOS, one `ContentResolver.applyBatch` on
+> Android), so a failure rolls the whole batch back. Updates are applied in place
+> and preserve each contact's identifier. See [Updating contacts](#updating-contacts)
+> for the field-replacement semantics that apply to both single and batch updates.
 
 ## Contact Groups
 
@@ -631,17 +636,35 @@ cursor?.close()
 
 | Feature | iOS | Android |
 |---------|-----|---------|
-| Social profiles | Supported | Not available |
+| Social profiles | Read + write | Not available (silently ignored) |
+| Instant messages | Read + write | Read + write |
+| Image data | Read + write (thumbnail + full-size) | Read + write (provider may downscale) |
+| Notes | Read + write (needs entitlement) | Read + write |
+| Custom labels | Read + write | Read + write |
+| Contact type (person/org) | Reported by the system | Inferred (company set, no personal name) |
 | Contact groups | Full support | Full support |
 | Containers/Accounts | Full support (iCloud, Exchange, CardDAV) | Approximate (via RawContacts accounts) |
 | Contact picker | CNContactPickerViewController | ACTION_PICK intent |
 | Contact viewer | CNContactViewController | ACTION_VIEW intent |
 | Contact editor | CNContactViewController | ACTION_INSERT/EDIT intent |
 | Multiple selection | Supported | Not supported (single pick) |
-| Image data | Thumbnail + full-size | Thumbnail + full-size |
-| Notes | Full support | Full support |
-| Previous family name | Supported | Not available |
+| Previous family name | Supported | Not available (no column) |
+| Postal ISO country code | Supported | Not available (no column) |
 | Phonetic names | Supported | Supported |
+
+### Updating contacts
+
+`updateContact`/`updateContacts` update in place on both platforms: the contact's
+identifier is preserved, and rows the library does not manage (notably group
+membership and account binding) are left intact.
+
+Update **replaces** the contact's managed fields with what the supplied `Contact`
+carries, so **fetch the full contact before updating** (the default `.all` field
+set), mutate it, and write it back. Updating a contact obtained from a *narrowed*
+fetch (e.g. `.summary`) will clear the fields that were not fetched. The note and
+photo are the exception: they are only replaced when the model actually carries a
+value, so an unfetched note (notes are excluded from `.all`) or photo is preserved
+rather than cleared.
 
 ## Building
 

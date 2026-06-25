@@ -922,6 +922,106 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
         }
     }
 
+    // MARK: - Round-trip parity & in-place update
+
+    @Test func testUpdatePreservesIDAndGroupMembership() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let unique = "SkipUpdId\(Int.random(in: 10000..<99999))"
+        let contact = Contact(givenName: unique, familyName: "Before")
+        contact.phoneNumbers = [ContactPhoneNumber(label: .mobile, value: "+15550112233")]
+        let id = try manager.createContact(contact)
+        let groupName = "SkipUpdGrp\(Int.random(in: 10000..<99999))"
+        let groupID = try manager.createGroup(name: groupName)
+
+        var caught: Error? = nil
+        do {
+            try manager.addContactToGroup(contactID: id, groupID: groupID)
+
+            let edit = Contact(id: id, givenName: unique, familyName: "After")
+            edit.phoneNumbers = [ContactPhoneNumber(label: .mobile, value: "+15550112233")]
+            try manager.updateContact(edit)
+
+            // The update is in place, so the identifier is preserved on both platforms.
+            let fetched = try #require(try manager.getContact(id: id))
+            #expect(fetched.id == id)
+            #expect(fetched.familyName == "After")
+
+            // Group membership (a row the Contact model does not carry) must survive the update.
+            let members = try manager.getContacts(inGroup: groupID)
+            #expect(members.contains { $0.id == id })
+        } catch {
+            caught = error
+        }
+        try? manager.deleteContact(id: id)
+        try? manager.deleteGroup(id: groupID)
+        if let caught = caught { throw caught }
+    }
+
+    @Test func testImageRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        // A valid 1×1 PNG; the platform may transform/downscale it, but it must round-trip as available.
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="))
+        let contact = Contact(givenName: "SkipImage\(Int.random(in: 10000..<99999))", familyName: "Photo")
+        contact.image = ContactImage(imageData: png)
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.all))
+            #expect(fetched.image?.isAvailable == true)
+        }
+    }
+
+    @Test func testInstantMessageRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipIM\(Int.random(in: 10000..<99999))", familyName: "Messenger")
+        contact.instantMessageAddresses = [ContactInstantMessageAddress(username: "skipper", service: "Skype")]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.instantMessageAddresses.contains { $0.username == "skipper" })
+        }
+    }
+
+    @Test func testAnniversaryRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipAnniv\(Int.random(in: 10000..<99999))", familyName: "Dates")
+        contact.dates = [ContactDate(label: .anniversary, day: 14, month: 2, year: 2010)]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            let anniv = fetched.dates.first { $0.day == 14 && $0.month == 2 }
+            #expect(anniv != nil)
+        }
+    }
+
+    @Test func testCustomLabelRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipCustom\(Int.random(in: 10000..<99999))", familyName: "Label")
+        contact.phoneNumbers = [ContactPhoneNumber(label: .other, customLabel: "Emergency", value: "+15550199999")]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            let phone = fetched.phoneNumbers.first { $0.value.contains("0199999") }
+            #expect(phone?.customLabel == "Emergency")
+        }
+    }
+
+    @Test func testOrganizationContactTypeRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(contactType: .organization, organizationName: "SkipOrg\(Int.random(in: 10000..<99999))")
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.contactType == .organization)
+        }
+    }
+
     // MARK: - Groups
 
     @Test func testCreateAndDeleteGroup() throws {
