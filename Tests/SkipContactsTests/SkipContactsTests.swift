@@ -1133,6 +1133,28 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
         #expect(!defaultID.isEmpty)
     }
 
+    // MARK: - Change Observation
+
+    @Test func testObserveChangesRegisterAndCancel() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let observer = manager.observeChanges {
+            logger.info("contacts changed")
+        }
+
+        // Make a change that notifies observers. Delivery is asynchronous and
+        // dispatched to the main thread, so we verify the register/cancel plumbing
+        // works without crashing rather than asserting the handler fired.
+        let contact = Contact(givenName: "SkipObserve\(Int.random(in: 10000..<99999))", familyName: "Change")
+        let id = try manager.createContact(contact)
+
+        observer.cancel()
+        observer.cancel()  // cancelling twice must be safe
+
+        try manager.deleteContact(id: id)
+    }
+
     // MARK: - Pagination
 
     @Test func testPagination() throws {

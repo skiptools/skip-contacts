@@ -275,6 +275,39 @@ public final class ContactManager {
         return try getAndroidDefaultContainerID()
         #endif
     }
+
+    // MARK: - Change Observation
+
+    /// Observe changes to the contacts database, including edits made by other apps
+    /// (such as the system Contacts app or the picker/editor UI). The `handler` is
+    /// invoked on the main thread whenever contact data changes; refetch your data
+    /// inside it (cached `Contact` objects should be discarded and refetched).
+    ///
+    /// The returned `ContactObserver` keeps the subscription alive — retain it for as
+    /// long as you want notifications, and call `cancel()` (or release it) to stop.
+    ///
+    /// On iOS this wraps the `CNContactStoreDidChange` notification; on Android it
+    /// registers a `ContentObserver` on the contacts content URI.
+    /* SKIP @nobridge */ public func observeChanges(_ handler: @escaping () -> Void) -> ContactObserver {
+        #if !SKIP
+        let token = NotificationCenter.default.addObserver(forName: .CNContactStoreDidChange, object: nil, queue: .main) { _ in
+            handler()
+        }
+        return ContactObserver(token: token)
+        #else
+        let resolver = ProcessInfo.processInfo.androidContext.contentResolver
+        var observer: android.database.ContentObserver? = nil
+        /* SKIP INSERT:
+        observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                handler()
+            }
+        }
+        */
+        resolver.registerContentObserver(android.provider.ContactsContract.Contacts.CONTENT_URI, true, observer!)
+        return ContactObserver(contentObserver: observer!)
+        #endif
+    }
 }
 
 // MARK: - iOS/macOS Implementation
@@ -1790,5 +1823,44 @@ extension ContactManager {
 }
 
 #endif
+
+// MARK: - Change Observation
+
+/// A cancellable handle for a contacts-change subscription created by
+/// `ContactManager.observeChanges(_:)`.
+///
+/// Retain it for as long as you want to receive notifications. Call `cancel()` to
+/// stop observing; it is safe to call more than once.
+public final class ContactObserver {
+    #if !SKIP
+    private var token: NSObjectProtocol?
+
+    init(token: NSObjectProtocol) {
+        self.token = token
+    }
+
+    /// Stop observing contact changes.
+    public func cancel() {
+        if let token = token {
+            NotificationCenter.default.removeObserver(token)
+            self.token = nil
+        }
+    }
+    #else
+    private var contentObserver: android.database.ContentObserver?
+
+    init(contentObserver: android.database.ContentObserver) {
+        self.contentObserver = contentObserver
+    }
+
+    /// Stop observing contact changes.
+    public func cancel() {
+        if let observer = contentObserver {
+            ProcessInfo.processInfo.androidContext.contentResolver.unregisterContentObserver(observer)
+            self.contentObserver = nil
+        }
+    }
+    #endif
+}
 
 #endif

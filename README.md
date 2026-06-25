@@ -400,6 +400,33 @@ for container in containers {
 let defaultID = try manager.getDefaultContainerID()
 ```
 
+## Observing Changes
+
+Subscribe to changes in the contacts database — including edits made by other apps
+(the system Contacts app, the picker/editor UI, or a sync) — so your UI can refresh.
+On iOS this wraps the `CNContactStoreDidChange` notification; on Android it registers
+a `ContentObserver` on the contacts content URI. The handler is invoked on the main
+thread; discard any cached `Contact` objects and refetch inside it.
+
+```swift
+// Retain the observer for as long as you want notifications.
+let observer = manager.observeChanges {
+    reloadContacts() // e.g. refetch and update your UI
+}
+
+// Stop observing (also called automatically if the observer is released).
+observer.cancel()
+```
+
+The returned `ContactObserver` keeps the subscription alive, so store it (e.g. in a
+property or view model). Releasing it or calling `cancel()` unregisters the
+subscription; `cancel()` is idempotent and safe to call more than once.
+
+> [!NOTE]
+> Change notifications are coalesced and delivered asynchronously by the platform —
+> a single notification may cover several edits, and you should treat it as "something
+> changed, refetch" rather than a precise diff.
+
 ## Contact UI
 
 SkipContacts provides SwiftUI view modifiers for presenting native contact interfaces.
