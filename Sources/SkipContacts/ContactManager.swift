@@ -87,7 +87,7 @@ public final class ContactManager {
     ///
     /// Note: requesting `.note` requires the `com.apple.developer.contacts.notes`
     /// entitlement on iOS.
-    public func getContact(id: String, fields: ContactFields = ContactFields.all) throws -> Contact? {
+    public func getContact(id: String, fields: ContactFields = ContactFields.default) throws -> Contact? {
         let options = ContactFetchOptions(contactIDs: [id], fields: fields)
         let result = try getContacts(options: options)
         return result.contacts.first
@@ -97,7 +97,7 @@ public final class ContactManager {
     ///
     /// Note: requesting `.note` requires the `com.apple.developer.contacts.notes`
     /// entitlement on iOS.
-    public func getContacts(inGroup groupID: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+    public func getContacts(inGroup groupID: String, fields: ContactFields = ContactFields.default) throws -> [Contact] {
         let options = ContactFetchOptions(groupID: groupID, fields: fields)
         return try getContacts(options: options).contacts
     }
@@ -107,13 +107,13 @@ public final class ContactManager {
     /// Matching is performed by the platform using its own number-normalization
     /// rules, so formatting differences (spaces, dashes, parentheses, and—on
     /// Android—country-code variations) are generally ignored.
-    public func getContacts(matchingPhoneNumber number: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+    public func getContacts(matchingPhoneNumber number: String, fields: ContactFields = ContactFields.default) throws -> [Contact] {
         let options = ContactFetchOptions(phoneNumberFilter: number, fields: fields)
         return try getContacts(options: options).contacts
     }
 
     /// Fetch all contacts that have an email address matching the given address.
-    public func getContacts(matchingEmail email: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+    public func getContacts(matchingEmail email: String, fields: ContactFields = ContactFields.default) throws -> [Contact] {
         let options = ContactFetchOptions(emailFilter: email, fields: fields)
         return try getContacts(options: options).contacts
     }
@@ -673,7 +673,9 @@ extension ContactManager {
             // only include the restricted note key when the update actually carries
             // a note to write; otherwise the fetch would require the
             // `com.apple.developer.contacts.notes` entitlement for every update.
-            let fetchFields: ContactFields = contact.note.isEmpty ? ContactFields.all : ContactFields.everything
+            // `.default` already excludes the note (and image), so add image back
+            // and add the note only when one is being written.
+            let fetchFields: ContactFields = contact.note.isEmpty ? ContactFields.default.union(.image) : ContactFields.all
             let keys = keysToFetch(options: ContactFetchOptions(fields: fetchFields))
             let cnContact = try contactStore.unifiedContact(withIdentifier: contactID, keysToFetch: keys)
             let mutable = cnContact.mutableCopy() as! CNMutableContact

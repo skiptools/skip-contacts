@@ -277,9 +277,10 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(options.pageSize == nil)
         #expect(options.pageOffset == nil)
         #expect(options.sortOrder == .none)
-        // The default field set is `.all` (every field except the restricted note).
-        #expect(options.fields.rawValue == ContactFields.all.rawValue)
-        #expect(options.fields.contains(.image))
+        // The default field set is `.default` (every field except image and the restricted note).
+        #expect(options.fields.rawValue == ContactFields.default.rawValue)
+        #expect(options.fields.contains(.name))
+        #expect(!options.fields.contains(.image))
         #expect(!options.fields.contains(.note))
     }
 
@@ -339,23 +340,27 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(!summary.contains(.note))
     }
 
-    @Test func testContactFieldsAllExcludesNote() throws {
-        // `.all` must include every flag except the entitlement-restricted note.
+    @Test func testContactFieldsDefaultAndAll() throws {
+        // `.default` includes the common fields but excludes image and the restricted note.
+        #expect(ContactFields.default.contains(.name))
+        #expect(ContactFields.default.contains(.relationships))
+        #expect(!ContactFields.default.contains(.image))
+        #expect(!ContactFields.default.contains(.note))
+
+        // `.all` includes every field, including image and note.
         #expect(ContactFields.all.contains(.name))
         #expect(ContactFields.all.contains(.image))
+        #expect(ContactFields.all.contains(.note))
         #expect(ContactFields.all.contains(.relationships))
-        #expect(!ContactFields.all.contains(.note))
-
-        // `.everything` adds the note on top of `.all`.
-        #expect(ContactFields.everything.contains(.note))
-        #expect(ContactFields.everything.contains(.image))
     }
 
     @Test func testContactFieldsUnion() throws {
-        let combined = ContactFields.all.union(.note)
+        // `.default` plus image plus note is the whole set.
+        let combined = ContactFields.default.union(.image).union(.note)
         #expect(combined.contains(.note))
+        #expect(combined.contains(.image))
         #expect(combined.contains(.name))
-        #expect(combined.rawValue == ContactFields.everything.rawValue)
+        #expect(combined.rawValue == ContactFields.all.rawValue)
     }
 
     // MARK: - Fetch Result
@@ -672,7 +677,7 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
         contact.note = "This is a test note from skip-contacts integration tests"
 
         try withTestContact(contact) { id in
-            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.everything))
+            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.all))
             #expect(fetched.note == "This is a test note from skip-contacts integration tests")
         }
     }
@@ -776,11 +781,12 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
             #expect(orgOnly.givenName == "")
             #expect(orgOnly.phoneNumbers.isEmpty)
 
-            // The full default set includes everything except the restricted note.
+            // The default field set includes the common fields (but not image or note).
             let full = try #require(try manager.getContact(id: id))
             #expect(full.givenName == unique)
             #expect(full.postalAddresses.count >= 1)
             #expect(full.organizationName == "Acme Inc")
+            #expect(full.image == nil)
         }
     }
 
@@ -1195,7 +1201,7 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
         contact.note = "Integration test complex contact"
 
         try withTestContact(contact) { id in
-            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.everything))
+            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.all))
             #expect(fetched.givenName == "SkipComplex")
             #expect(fetched.familyName == "RoundTrip")
             #expect(fetched.organizationName == "Skip Tools")

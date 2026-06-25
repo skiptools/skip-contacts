@@ -41,23 +41,24 @@ INFOPLIST_KEY_NSContactsUsageDescription = This app needs access to your contact
 
 #### Reading contact notes (restricted)
 
-The contact **note** field is restricted by Apple. Reading it requires the special
-`com.apple.developer.contacts.notes` entitlement, which you must
-[request from and be approved by Apple](https://developer.apple.com/contact/request/contact-note-field).
-Fetching a contact with the note key in `keysToFetch` while the app lacks this
-entitlement will fail.
+> [!IMPORTANT]
+> The contact **note** field is restricted by Apple. Reading it requires the special
+> `com.apple.developer.contacts.notes` entitlement, which you must
+> [request from and be approved by Apple](https://developer.apple.com/contact/request/contact-note-field).
+> Fetching a contact with the note key in `keysToFetch` while the app lacks this
+> entitlement will fail.
 
 Because most apps do not have this entitlement, the `note` field is **excluded
-from the default field set** (`.all`) so fetches work out of the box. Notes are
+from the default field set** (`.default`) so fetches work out of the box. Notes are
 only read when you explicitly request the `.note` field (see
 [Selecting fields to fetch](#selecting-fields-to-fetch)):
 
 ```swift
-// Default (.all) — does not touch the restricted note field, no entitlement needed
+// Default — does not touch the restricted note field, no entitlement needed
 let contact = try manager.getContact(id: contactID)
 
 // Opt in — only works if your app has the com.apple.developer.contacts.notes entitlement
-let withNote = try manager.getContact(id: contactID, fields: .everything)
+let withNote = try manager.getContact(id: contactID, fields: .all)
 ```
 
 Writing the note field (setting `Contact.note` to a non-empty value before
@@ -126,7 +127,7 @@ let options = ContactFetchOptions(
     pageSize: 20,
     pageOffset: 0,
     sortOrder: .givenName,
-    fields: .all // every field except the restricted note; see "Selecting fields to fetch"
+    fields: .default // every field except image and the restricted note; see "Selecting fields to fetch"
 )
 let result = try manager.getContacts(options: options)
 
@@ -215,11 +216,12 @@ let hasAny = try manager.hasContacts()
 
 ### Selecting fields to fetch
 
-By default, fetches populate every field except the entitlement-restricted note.
-When you only need some of the data — for example, name and phone number for a
-list row — request a narrower set of fields with the `ContactFields` option set.
-The platform then loads only the requested keys, which can substantially improve
-performance and reduce memory use on large address books.
+By default, fetches populate every field except image data and the
+entitlement-restricted note. When you only need some of the data — for example,
+name and phone number for a list row — request a narrower set of fields with the
+`ContactFields` option set. The platform then loads only the requested keys, which
+can substantially improve performance and reduce memory use on large address books.
+Conversely, pass `.all` to also load images and (with the entitlement) notes.
 
 ```swift
 // Lightweight fetch for a list: name, phone numbers, and email addresses
@@ -228,8 +230,8 @@ let people = try manager.getContacts(options: ContactFetchOptions(fields: .summa
 // A custom set: just names and images
 let withPhotos = try manager.getContacts(options: ContactFetchOptions(fields: ContactFields.name.union(.image)))
 
-// Combine the convenience presets with extra fields
-let everythingPlusNote = ContactFields.all.union(.note) // == .everything
+// Everything, including image data and (with the entitlement) the note
+let full = try manager.getContacts(options: ContactFetchOptions(fields: .all))
 ```
 
 Available fields and presets:
@@ -249,8 +251,8 @@ Available fields and presets:
 | `.image` | Thumbnail and full-size image data |
 | `.note` | Note field — requires the iOS notes entitlement (see above) |
 | `.summary` | `.name`, `.phoneNumbers`, `.emailAddresses` |
-| `.all` | Every field **except** `.note` (the default) |
-| `.everything` | Every field **including** `.note` |
+| `.default` | Every field **except** `.image` and `.note` (the default) |
+| `.all` | Every field, **including** `.image` and `.note` |
 
 > Note: Unrequested fields are left at their empty defaults on the returned
 > `Contact` (e.g. `postalAddresses` is `[]`, `organizationName` is `""`). On iOS,
@@ -308,7 +310,7 @@ preserved), and it replaces the contact's managed fields with what the model
 carries — see [Updating contacts](#updating-contacts) for the full semantics.
 
 ```swift
-// Fetch the contact first (default `.all` fetches every field except the note)
+// Fetch the contact first (default `.default` fetches every field except image and the note)
 if let contact = try manager.getContact(id: contactID) {
     contact.jobTitle = "Senior Engineer"
     contact.phoneNumbers.append(
@@ -659,12 +661,13 @@ identifier is preserved, and rows the library does not manage (notably group
 membership and account binding) are left intact.
 
 Update **replaces** the contact's managed fields with what the supplied `Contact`
-carries, so **fetch the full contact before updating** (the default `.all` field
-set), mutate it, and write it back. Updating a contact obtained from a *narrowed*
-fetch (e.g. `.summary`) will clear the fields that were not fetched. The note and
-photo are the exception: they are only replaced when the model actually carries a
-value, so an unfetched note (notes are excluded from `.all`) or photo is preserved
-rather than cleared.
+carries, so **fetch before updating**, mutate, then write back. A fetch with the
+default field set (`.default`) loads every field except image and note, so the
+round-trip *fetch → mutate → update* is safe for those. Updating a contact obtained
+from a *narrowed* fetch (e.g. `.summary`) will clear the other fields that were not
+fetched. The note and image are special-cased: they are only replaced when the
+supplied model actually carries a value, so they are never silently cleared by a
+fetch that omitted them (including the default fetch, which omits both).
 
 ## Building
 
