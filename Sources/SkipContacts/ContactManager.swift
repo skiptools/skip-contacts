@@ -83,22 +83,22 @@ public final class ContactManager {
         #endif
     }
 
-    /// Fetch a single contact by ID.
+    /// Fetch a single contact by ID, populating the given fields.
     ///
-    /// Note: requesting the note field (`includeNote: true`) requires the
-    /// `com.apple.developer.contacts.notes` entitlement on iOS.
-    public func getContact(id: String, includeImages: Bool = false, includeNote: Bool = false) throws -> Contact? {
-        let options = ContactFetchOptions(contactIDs: [id], includeImages: includeImages, includeNote: includeNote)
+    /// Note: requesting `.note` requires the `com.apple.developer.contacts.notes`
+    /// entitlement on iOS.
+    public func getContact(id: String, fields: ContactFields = ContactFields.all) throws -> Contact? {
+        let options = ContactFetchOptions(contactIDs: [id], fields: fields)
         let result = try getContacts(options: options)
         return result.contacts.first
     }
 
     /// Fetch all contacts that are members of the group with the given identifier.
     ///
-    /// Note: requesting the note field (`includeNote: true`) requires the
-    /// `com.apple.developer.contacts.notes` entitlement on iOS.
-    public func getContacts(inGroup groupID: String, includeImages: Bool = false, includeNote: Bool = false) throws -> [Contact] {
-        let options = ContactFetchOptions(groupID: groupID, includeImages: includeImages, includeNote: includeNote)
+    /// Note: requesting `.note` requires the `com.apple.developer.contacts.notes`
+    /// entitlement on iOS.
+    public func getContacts(inGroup groupID: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+        let options = ContactFetchOptions(groupID: groupID, fields: fields)
         return try getContacts(options: options).contacts
     }
 
@@ -107,14 +107,14 @@ public final class ContactManager {
     /// Matching is performed by the platform using its own number-normalization
     /// rules, so formatting differences (spaces, dashes, parentheses, and—on
     /// Android—country-code variations) are generally ignored.
-    public func getContacts(matchingPhoneNumber number: String, includeImages: Bool = false, includeNote: Bool = false) throws -> [Contact] {
-        let options = ContactFetchOptions(phoneNumberFilter: number, includeImages: includeImages, includeNote: includeNote)
+    public func getContacts(matchingPhoneNumber number: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+        let options = ContactFetchOptions(phoneNumberFilter: number, fields: fields)
         return try getContacts(options: options).contacts
     }
 
     /// Fetch all contacts that have an email address matching the given address.
-    public func getContacts(matchingEmail email: String, includeImages: Bool = false, includeNote: Bool = false) throws -> [Contact] {
-        let options = ContactFetchOptions(emailFilter: email, includeImages: includeImages, includeNote: includeNote)
+    public func getContacts(matchingEmail email: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+        let options = ContactFetchOptions(emailFilter: email, fields: fields)
         return try getContacts(options: options).contacts
     }
 
@@ -284,36 +284,58 @@ public final class ContactManager {
 extension ContactManager {
 
     private func keysToFetch(options: ContactFetchOptions) -> [CNKeyDescriptor] {
+        let fields = options.fields
+        // The identifier and type are always needed to construct a Contact.
         var keys: [CNKeyDescriptor] = [
             CNContactIdentifierKey as CNKeyDescriptor,
             CNContactTypeKey as CNKeyDescriptor,
-            CNContactNamePrefixKey as CNKeyDescriptor,
-            CNContactGivenNameKey as CNKeyDescriptor,
-            CNContactMiddleNameKey as CNKeyDescriptor,
-            CNContactFamilyNameKey as CNKeyDescriptor,
-            CNContactNameSuffixKey as CNKeyDescriptor,
-            CNContactNicknameKey as CNKeyDescriptor,
-            CNContactPhoneticGivenNameKey as CNKeyDescriptor,
-            CNContactPhoneticMiddleNameKey as CNKeyDescriptor,
-            CNContactPhoneticFamilyNameKey as CNKeyDescriptor,
-            CNContactPreviousFamilyNameKey as CNKeyDescriptor,
-            CNContactOrganizationNameKey as CNKeyDescriptor,
-            CNContactDepartmentNameKey as CNKeyDescriptor,
-            CNContactJobTitleKey as CNKeyDescriptor,
-            CNContactPhoneNumbersKey as CNKeyDescriptor,
-            CNContactEmailAddressesKey as CNKeyDescriptor,
-            CNContactPostalAddressesKey as CNKeyDescriptor,
-            CNContactUrlAddressesKey as CNKeyDescriptor,
-            CNContactInstantMessageAddressesKey as CNKeyDescriptor,
-            CNContactSocialProfilesKey as CNKeyDescriptor,
-            CNContactBirthdayKey as CNKeyDescriptor,
-            CNContactDatesKey as CNKeyDescriptor,
-            CNContactRelationsKey as CNKeyDescriptor,
         ]
-        if options.includeNote {
+        if fields.contains(.name) {
+            keys.append(CNContactNamePrefixKey as CNKeyDescriptor)
+            keys.append(CNContactGivenNameKey as CNKeyDescriptor)
+            keys.append(CNContactMiddleNameKey as CNKeyDescriptor)
+            keys.append(CNContactFamilyNameKey as CNKeyDescriptor)
+            keys.append(CNContactNameSuffixKey as CNKeyDescriptor)
+            keys.append(CNContactNicknameKey as CNKeyDescriptor)
+            keys.append(CNContactPhoneticGivenNameKey as CNKeyDescriptor)
+            keys.append(CNContactPhoneticMiddleNameKey as CNKeyDescriptor)
+            keys.append(CNContactPhoneticFamilyNameKey as CNKeyDescriptor)
+            keys.append(CNContactPreviousFamilyNameKey as CNKeyDescriptor)
+        }
+        if fields.contains(.organization) {
+            keys.append(CNContactOrganizationNameKey as CNKeyDescriptor)
+            keys.append(CNContactDepartmentNameKey as CNKeyDescriptor)
+            keys.append(CNContactJobTitleKey as CNKeyDescriptor)
+        }
+        if fields.contains(.phoneNumbers) {
+            keys.append(CNContactPhoneNumbersKey as CNKeyDescriptor)
+        }
+        if fields.contains(.emailAddresses) {
+            keys.append(CNContactEmailAddressesKey as CNKeyDescriptor)
+        }
+        if fields.contains(.postalAddresses) {
+            keys.append(CNContactPostalAddressesKey as CNKeyDescriptor)
+        }
+        if fields.contains(.urlAddresses) {
+            keys.append(CNContactUrlAddressesKey as CNKeyDescriptor)
+        }
+        if fields.contains(.instantMessageAddresses) {
+            keys.append(CNContactInstantMessageAddressesKey as CNKeyDescriptor)
+        }
+        if fields.contains(.socialProfiles) {
+            keys.append(CNContactSocialProfilesKey as CNKeyDescriptor)
+        }
+        if fields.contains(.dates) {
+            keys.append(CNContactBirthdayKey as CNKeyDescriptor)
+            keys.append(CNContactDatesKey as CNKeyDescriptor)
+        }
+        if fields.contains(.relationships) {
+            keys.append(CNContactRelationsKey as CNKeyDescriptor)
+        }
+        if fields.contains(.note) {
             keys.append(CNContactNoteKey as CNKeyDescriptor)
         }
-        if options.includeImages {
+        if fields.contains(.image) {
             keys.append(CNContactThumbnailImageDataKey as CNKeyDescriptor)
             keys.append(CNContactImageDataKey as CNKeyDescriptor)
             keys.append(CNContactImageDataAvailableKey as CNKeyDescriptor)
@@ -328,23 +350,23 @@ extension ContactManager {
         if let ids = options.contactIDs {
             let predicate = CNContact.predicateForContacts(withIdentifiers: ids)
             let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
-            contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
+            contacts = cnContacts.map { contactFromCN($0, fields: options.fields) }
         } else if let groupID = options.groupID, !groupID.isEmpty {
             let predicate = CNContact.predicateForContactsInGroup(withIdentifier: groupID)
             let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
-            contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
+            contacts = cnContacts.map { contactFromCN($0, fields: options.fields) }
         } else if let phone = options.phoneNumberFilter, !phone.isEmpty {
             let predicate = CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: phone))
             let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
-            contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
+            contacts = cnContacts.map { contactFromCN($0, fields: options.fields) }
         } else if let email = options.emailFilter, !email.isEmpty {
             let predicate = CNContact.predicateForContacts(matchingEmailAddress: email)
             let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
-            contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
+            contacts = cnContacts.map { contactFromCN($0, fields: options.fields) }
         } else if let name = options.nameFilter, !name.isEmpty {
             let predicate = CNContact.predicateForContacts(matchingName: name)
             let cnContacts = try contactStore.unifiedContacts(matching: predicate, keysToFetch: keys)
-            contacts = cnContacts.map { contactFromCN($0, includeImages: options.includeImages, includeNote: options.includeNote) }
+            contacts = cnContacts.map { contactFromCN($0, fields: options.fields) }
         } else {
             let request = CNContactFetchRequest(keysToFetch: keys)
             switch options.sortOrder {
@@ -356,7 +378,7 @@ extension ContactManager {
                 request.sortOrder = .userDefault
             }
             try contactStore.enumerateContacts(with: request) { cnContact, _ in
-                contacts.append(contactFromCN(cnContact, includeImages: options.includeImages, includeNote: options.includeNote))
+                contacts.append(contactFromCN(cnContact, fields: options.fields))
             }
         }
 
@@ -378,109 +400,131 @@ extension ContactManager {
         return ContactFetchResult(contacts: contacts, hasNextPage: hasNextPage)
     }
 
-    private func contactFromCN(_ cn: CNContact, includeImages: Bool, includeNote: Bool) -> Contact {
+    private func contactFromCN(_ cn: CNContact, fields: ContactFields) -> Contact {
         let contact = Contact()
         contact.id = cn.identifier
         contact.contactType = cn.contactType == .organization ? .organization : .person
 
-        contact.namePrefix = cn.namePrefix
-        contact.givenName = cn.givenName
-        contact.middleName = cn.middleName
-        contact.familyName = cn.familyName
-        contact.nameSuffix = cn.nameSuffix
-        contact.nickname = cn.nickname
-        contact.phoneticGivenName = cn.phoneticGivenName
-        contact.phoneticMiddleName = cn.phoneticMiddleName
-        contact.phoneticFamilyName = cn.phoneticFamilyName
-        contact.previousFamilyName = cn.previousFamilyName
-
-        contact.organizationName = cn.organizationName
-        contact.departmentName = cn.departmentName
-        contact.jobTitle = cn.jobTitle
-
-        contact.phoneNumbers = cn.phoneNumbers.map { labeled in
-            ContactPhoneNumber(
-                label: PhoneLabel.fromCNLabel(labeled.label),
-                value: labeled.value.stringValue
-            )
+        // Only read keys that were actually fetched; accessing an unfetched key
+        // on a CNContact throws a CNPropertyNotFetchedError.
+        if fields.contains(.name) {
+            contact.namePrefix = cn.namePrefix
+            contact.givenName = cn.givenName
+            contact.middleName = cn.middleName
+            contact.familyName = cn.familyName
+            contact.nameSuffix = cn.nameSuffix
+            contact.nickname = cn.nickname
+            contact.phoneticGivenName = cn.phoneticGivenName
+            contact.phoneticMiddleName = cn.phoneticMiddleName
+            contact.phoneticFamilyName = cn.phoneticFamilyName
+            contact.previousFamilyName = cn.previousFamilyName
         }
 
-        contact.emailAddresses = cn.emailAddresses.map { labeled in
-            ContactEmailAddress(
-                label: EmailLabel.fromCNLabel(labeled.label),
-                value: labeled.value as String
-            )
+        if fields.contains(.organization) {
+            contact.organizationName = cn.organizationName
+            contact.departmentName = cn.departmentName
+            contact.jobTitle = cn.jobTitle
         }
 
-        contact.postalAddresses = cn.postalAddresses.map { labeled in
-            let addr = labeled.value
-            return ContactPostalAddress(
-                label: AddressLabel.fromCNLabel(labeled.label),
-                street: addr.street,
-                city: addr.city,
-                state: addr.state,
-                postalCode: addr.postalCode,
-                country: addr.country,
-                isoCountryCode: addr.isoCountryCode
-            )
+        if fields.contains(.phoneNumbers) {
+            contact.phoneNumbers = cn.phoneNumbers.map { labeled in
+                ContactPhoneNumber(
+                    label: PhoneLabel.fromCNLabel(labeled.label),
+                    value: labeled.value.stringValue
+                )
+            }
         }
 
-        contact.urlAddresses = cn.urlAddresses.map { labeled in
-            ContactURLAddress(
-                label: URLLabel.fromCNLabel(labeled.label),
-                value: labeled.value as String
-            )
+        if fields.contains(.emailAddresses) {
+            contact.emailAddresses = cn.emailAddresses.map { labeled in
+                ContactEmailAddress(
+                    label: EmailLabel.fromCNLabel(labeled.label),
+                    value: labeled.value as String
+                )
+            }
         }
 
-        contact.instantMessageAddresses = cn.instantMessageAddresses.map { labeled in
-            let im = labeled.value
-            return ContactInstantMessageAddress(
-                username: im.username,
-                service: im.service
-            )
+        if fields.contains(.postalAddresses) {
+            contact.postalAddresses = cn.postalAddresses.map { labeled in
+                let addr = labeled.value
+                return ContactPostalAddress(
+                    label: AddressLabel.fromCNLabel(labeled.label),
+                    street: addr.street,
+                    city: addr.city,
+                    state: addr.state,
+                    postalCode: addr.postalCode,
+                    country: addr.country,
+                    isoCountryCode: addr.isoCountryCode
+                )
+            }
         }
 
-        contact.socialProfiles = cn.socialProfiles.map { labeled in
-            let sp = labeled.value
-            return ContactSocialProfile(
-                username: sp.username,
-                service: sp.service,
-                urlString: sp.urlString,
-                userIdentifier: sp.userIdentifier
-            )
+        if fields.contains(.urlAddresses) {
+            contact.urlAddresses = cn.urlAddresses.map { labeled in
+                ContactURLAddress(
+                    label: URLLabel.fromCNLabel(labeled.label),
+                    value: labeled.value as String
+                )
+            }
         }
 
-        if let bday = cn.birthday {
-            contact.birthday = ContactDate(
-                label: .birthday,
-                day: bday.day ?? 1,
-                month: bday.month ?? 1,
-                year: bday.year
-            )
+        if fields.contains(.instantMessageAddresses) {
+            contact.instantMessageAddresses = cn.instantMessageAddresses.map { labeled in
+                let im = labeled.value
+                return ContactInstantMessageAddress(
+                    username: im.username,
+                    service: im.service
+                )
+            }
         }
 
-        contact.dates = cn.dates.map { labeled in
-            let dc = labeled.value
-            return ContactDate(
-                label: DateLabel.fromCNLabel(labeled.label),
-                day: dc.day as Int,
-                month: dc.month as Int,
-                year: dc.year
-            )
+        if fields.contains(.socialProfiles) {
+            contact.socialProfiles = cn.socialProfiles.map { labeled in
+                let sp = labeled.value
+                return ContactSocialProfile(
+                    username: sp.username,
+                    service: sp.service,
+                    urlString: sp.urlString,
+                    userIdentifier: sp.userIdentifier
+                )
+            }
         }
 
-        contact.relationships = cn.contactRelations.map { labeled in
-            ContactRelationship(
-                label: RelationshipLabel.fromCNLabel(labeled.label),
-                name: labeled.value.name
-            )
+        if fields.contains(.dates) {
+            if let bday = cn.birthday {
+                contact.birthday = ContactDate(
+                    label: .birthday,
+                    day: bday.day ?? 1,
+                    month: bday.month ?? 1,
+                    year: bday.year
+                )
+            }
+
+            contact.dates = cn.dates.map { labeled in
+                let dc = labeled.value
+                return ContactDate(
+                    label: DateLabel.fromCNLabel(labeled.label),
+                    day: dc.day as Int,
+                    month: dc.month as Int,
+                    year: dc.year
+                )
+            }
         }
 
-        if includeNote {
+        if fields.contains(.relationships) {
+            contact.relationships = cn.contactRelations.map { labeled in
+                ContactRelationship(
+                    label: RelationshipLabel.fromCNLabel(labeled.label),
+                    name: labeled.value.name
+                )
+            }
+        }
+
+        if fields.contains(.note) {
             contact.note = cn.note
         }
 
-        if includeImages {
+        if fields.contains(.image) {
             let img = ContactImage()
             img.thumbnailData = cn.thumbnailImageData
             img.imageData = cn.imageData
@@ -605,10 +649,12 @@ extension ContactManager {
             guard let contactID = contact.id else {
                 throw ContactError.invalidData("Contact must have an id to update")
             }
-            // Only fetch the restricted note key when the update actually carries a
-            // note to write; otherwise the fetch would require the
+            // Fetch all writable fields so the existing values are preserved, but
+            // only include the restricted note key when the update actually carries
+            // a note to write; otherwise the fetch would require the
             // `com.apple.developer.contacts.notes` entitlement for every update.
-            let keys = keysToFetch(options: ContactFetchOptions(includeImages: true, includeNote: !contact.note.isEmpty))
+            let fetchFields: ContactFields = contact.note.isEmpty ? ContactFields.all : ContactFields.everything
+            let keys = keysToFetch(options: ContactFetchOptions(fields: fetchFields))
             let cnContact = try contactStore.unifiedContact(withIdentifier: contactID, keysToFetch: keys)
             let mutable = cnContact.mutableCopy() as! CNMutableContact
             applyCNContactProperties(contact, to: mutable)
@@ -797,12 +843,15 @@ extension ContactManager {
                 let contact = Contact()
                 contact.id = contactID
 
-                // Load name from display name
-                let displayName = cursor.getString(nameIndex) ?? ""
-                contact.givenName = displayName
+                // Seed the given name from the display name; the detailed data
+                // load below replaces it with the structured name when requested.
+                if options.fields.contains(.name) {
+                    let displayName = cursor.getString(nameIndex) ?? ""
+                    contact.givenName = displayName
+                }
 
                 // Load detailed data
-                loadAndroidContactDetails(resolver: resolver, contact: contact, contactID: contactID, includeImages: options.includeImages, includeNote: options.includeNote)
+                loadAndroidContactDetails(resolver: resolver, contact: contact, contactID: contactID, fields: options.fields)
 
                 contacts.append(contact)
                 count = count + 1
@@ -881,14 +930,20 @@ extension ContactManager {
         return collectDistinctStrings(cursor: cursor, columnName: android.provider.ContactsContract.Data.CONTACT_ID)
     }
 
-    private func loadAndroidContactDetails(resolver: android.content.ContentResolver, contact: Contact, contactID: String, includeImages: Bool, includeNote: Bool) {
-        let dataUri = android.provider.ContactsContract.Data.CONTENT_URI
-        let dataSelection = "\(android.provider.ContactsContract.Data.CONTACT_ID) = ?"
-        let dataArgs = [contactID]
+    private func loadAndroidContactDetails(resolver: android.content.ContentResolver, contact: Contact, contactID: String, fields: ContactFields) {
+        // Restrict the data query to only the MIME types backing the requested
+        // fields, so unneeded rows are never read.
+        let mimeTypes = androidMimeTypes(forFields: fields)
+        if !mimeTypes.isEmpty {
+            let dataUri = android.provider.ContactsContract.Data.CONTENT_URI
+            let placeholders = mimeTypes.map { _ in "?" }.joined(separator: ",")
+            let dataSelection = "\(android.provider.ContactsContract.Data.CONTACT_ID) = ? AND \(android.provider.ContactsContract.Data.MIMETYPE) IN (\(placeholders))"
+            var dataArgs = [contactID]
+            dataArgs.append(contentsOf: mimeTypes)
 
-        let dataCursor = resolver.query(dataUri, nil, dataSelection, dataArgs.toList().toTypedArray(), nil)
+            let dataCursor = resolver.query(dataUri, nil, dataSelection, dataArgs.toList().toTypedArray(), nil)
 
-        if let dataCursor = dataCursor {
+            if let dataCursor = dataCursor {
             let mimeIndex = dataCursor.getColumnIndex(android.provider.ContactsContract.Data.MIMETYPE)
 
             while dataCursor.moveToNext() {
@@ -964,21 +1019,60 @@ extension ContactManager {
                     contact.nickname = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Nickname.NAME)) ?? ""
 
                 case android.provider.ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE:
-                    if includeNote {
-                        contact.note = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Note.NOTE)) ?? ""
-                    }
+                    // The Note MIME type is only queried when `.note` is requested.
+                    contact.note = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Note.NOTE)) ?? ""
 
                 default:
                     break
                 }
             }
-            dataCursor.close()
+                dataCursor.close()
+            }
         }
 
         // Load photo if requested
-        if includeImages {
+        if fields.contains(.image) {
             loadAndroidContactImage(resolver: resolver, contact: contact, contactID: contactID)
         }
+    }
+
+    /// The Android `Data` MIME types backing the requested fields. Image data is
+    /// loaded separately and has no MIME type here; social profiles have no
+    /// read mapping on Android.
+    private func androidMimeTypes(forFields fields: ContactFields) -> [String] {
+        var mimeTypes: [String] = []
+        if fields.contains(.name) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.phoneNumbers) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.emailAddresses) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.postalAddresses) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.organization) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.urlAddresses) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Website.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.instantMessageAddresses) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.dates) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.relationships) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Relation.CONTENT_ITEM_TYPE)
+        }
+        if fields.contains(.note) {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE)
+        }
+        return mimeTypes
     }
 
     private func loadAndroidContactImage(resolver: android.content.ContentResolver, contact: Contact, contactID: String) {

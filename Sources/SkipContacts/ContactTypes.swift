@@ -591,6 +591,60 @@ public enum ContainerType: String {
 
 // MARK: - Query Options
 
+/// The set of contact fields to fetch.
+///
+/// Narrowing the fields can substantially improve performance when only some
+/// data is needed (for example, name and phone number for a list row), since the
+/// platform only loads the requested keys.
+public struct ContactFields: OptionSet, Sendable {
+    public let rawValue: Int
+
+    public init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
+
+    /// Name fields: prefix, given, middle, family, suffix, nickname, phonetic names.
+    public static let name = ContactFields(rawValue: 1 << 0)
+    /// Phone numbers.
+    public static let phoneNumbers = ContactFields(rawValue: 1 << 1)
+    /// Email addresses.
+    public static let emailAddresses = ContactFields(rawValue: 1 << 2)
+    /// Postal addresses.
+    public static let postalAddresses = ContactFields(rawValue: 1 << 3)
+    /// Organization, department, and job title.
+    public static let organization = ContactFields(rawValue: 1 << 4)
+    /// URL addresses.
+    public static let urlAddresses = ContactFields(rawValue: 1 << 5)
+    /// Instant message addresses.
+    public static let instantMessageAddresses = ContactFields(rawValue: 1 << 6)
+    /// Social profiles. (Read support is iOS-only.)
+    public static let socialProfiles = ContactFields(rawValue: 1 << 7)
+    /// Birthday and other dates.
+    public static let dates = ContactFields(rawValue: 1 << 8)
+    /// Relationships.
+    public static let relationships = ContactFields(rawValue: 1 << 9)
+    /// Thumbnail and full-size image data.
+    public static let image = ContactFields(rawValue: 1 << 10)
+    /// The note field.
+    ///
+    /// On iOS, reading the note field requires the special
+    /// `com.apple.developer.contacts.notes` entitlement, which must be requested
+    /// from and approved by Apple. Without it, fetches that request notes will
+    /// fail. See the README for details. This is why `note` is excluded from
+    /// `.all` and is not part of the default field set.
+    public static let note = ContactFields(rawValue: 1 << 11)
+
+    /// A lightweight set for list/search display: name, phone numbers, and email addresses.
+    public static let summary = ContactFields(rawValue: (1 << 0) | (1 << 1) | (1 << 2))
+
+    /// All fields except the restricted `note` (which needs a special iOS entitlement).
+    /// This is the default field set for fetches.
+    public static let all = ContactFields(rawValue: (1 << 11) - 1)
+
+    /// Every field, including the restricted `note`.
+    public static let everything = ContactFields(rawValue: (1 << 12) - 1)
+}
+
 /// Options for fetching contacts.
 public final class ContactFetchOptions {
     /// Filter contacts by name.
@@ -612,15 +666,9 @@ public final class ContactFetchOptions {
     public var pageOffset: Int?
     /// Sort order for results.
     public var sortOrder: ContactSortOrder
-    /// Whether to include image data in results.
-    public var includeImages: Bool
-    /// Whether to include the note field. Defaults to `false`.
-    ///
-    /// On iOS, reading the note field requires the special
-    /// `com.apple.developer.contacts.notes` entitlement, which must be requested
-    /// from and approved by Apple. Without it, fetches that request notes will
-    /// fail. See the README for details.
-    public var includeNote: Bool
+    /// The set of fields to populate on the fetched contacts. Defaults to `.all`
+    /// (every field except the entitlement-restricted `note`).
+    public var fields: ContactFields
 
     public init(
         nameFilter: String? = nil,
@@ -631,8 +679,7 @@ public final class ContactFetchOptions {
         pageSize: Int? = nil,
         pageOffset: Int? = nil,
         sortOrder: ContactSortOrder = .none,
-        includeImages: Bool = false,
-        includeNote: Bool = false
+        fields: ContactFields = ContactFields.all
     ) {
         self.nameFilter = nameFilter
         self.contactIDs = contactIDs
@@ -642,8 +689,7 @@ public final class ContactFetchOptions {
         self.pageSize = pageSize
         self.pageOffset = pageOffset
         self.sortOrder = sortOrder
-        self.includeImages = includeImages
-        self.includeNote = includeNote
+        self.fields = fields
     }
 }
 
