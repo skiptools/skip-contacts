@@ -630,19 +630,20 @@ public struct ContactFields: OptionSet, Sendable {
     /// On iOS, reading the note field requires the special
     /// `com.apple.developer.contacts.notes` entitlement, which must be requested
     /// from and approved by Apple. Without it, fetches that request notes will
-    /// fail. See the README for details. This is why `note` is excluded from
-    /// `.all` and is not part of the default field set.
+    /// fail. See the README for details. This is why `note` is excluded from the
+    /// default field set.
     public static let note = ContactFields(rawValue: 1 << 11)
 
     /// A lightweight set for list/search display: name, phone numbers, and email addresses.
     public static let summary = ContactFields(rawValue: (1 << 0) | (1 << 1) | (1 << 2))
 
-    /// All fields except the restricted `note` (which needs a special iOS entitlement).
-    /// This is the default field set for fetches.
-    public static let all = ContactFields(rawValue: (1 << 11) - 1)
+    /// The default field set: every field except the entitlement-restricted `note`
+    /// and the (heavier) image `image` data. Suitable for general use without the
+    /// notes entitlement and without paying to load photos.
+    public static let `default` = ContactFields(rawValue: (1 << 10) - 1)
 
-    /// Every field, including the restricted `note`.
-    public static let everything = ContactFields(rawValue: (1 << 12) - 1)
+    /// Every field, including image data and the entitlement-restricted `note`.
+    public static let all = ContactFields(rawValue: (1 << 12) - 1)
 }
 
 /// Options for fetching contacts.
@@ -666,8 +667,9 @@ public final class ContactFetchOptions {
     public var pageOffset: Int?
     /// Sort order for results.
     public var sortOrder: ContactSortOrder
-    /// The set of fields to populate on the fetched contacts. Defaults to `.all`
-    /// (every field except the entitlement-restricted `note`).
+    /// The set of fields to populate on the fetched contacts. Defaults to
+    /// `.default` (every field except image data and the entitlement-restricted
+    /// `note`).
     public var fields: ContactFields
 
     public init(
@@ -679,7 +681,7 @@ public final class ContactFetchOptions {
         pageSize: Int? = nil,
         pageOffset: Int? = nil,
         sortOrder: ContactSortOrder = .none,
-        fields: ContactFields = ContactFields.all
+        fields: ContactFields = ContactFields.default
     ) {
         self.nameFilter = nameFilter
         self.contactIDs = contactIDs

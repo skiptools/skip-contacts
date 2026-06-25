@@ -87,7 +87,7 @@ public final class ContactManager {
     ///
     /// Note: requesting `.note` requires the `com.apple.developer.contacts.notes`
     /// entitlement on iOS.
-    public func getContact(id: String, fields: ContactFields = ContactFields.all) throws -> Contact? {
+    public func getContact(id: String, fields: ContactFields = ContactFields.default) throws -> Contact? {
         let options = ContactFetchOptions(contactIDs: [id], fields: fields)
         let result = try getContacts(options: options)
         return result.contacts.first
@@ -97,7 +97,7 @@ public final class ContactManager {
     ///
     /// Note: requesting `.note` requires the `com.apple.developer.contacts.notes`
     /// entitlement on iOS.
-    public func getContacts(inGroup groupID: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+    public func getContacts(inGroup groupID: String, fields: ContactFields = ContactFields.default) throws -> [Contact] {
         let options = ContactFetchOptions(groupID: groupID, fields: fields)
         return try getContacts(options: options).contacts
     }
@@ -107,13 +107,13 @@ public final class ContactManager {
     /// Matching is performed by the platform using its own number-normalization
     /// rules, so formatting differences (spaces, dashes, parentheses, and—on
     /// Android—country-code variations) are generally ignored.
-    public func getContacts(matchingPhoneNumber number: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+    public func getContacts(matchingPhoneNumber number: String, fields: ContactFields = ContactFields.default) throws -> [Contact] {
         let options = ContactFetchOptions(phoneNumberFilter: number, fields: fields)
         return try getContacts(options: options).contacts
     }
 
     /// Fetch all contacts that have an email address matching the given address.
-    public func getContacts(matchingEmail email: String, fields: ContactFields = ContactFields.all) throws -> [Contact] {
+    public func getContacts(matchingEmail email: String, fields: ContactFields = ContactFields.default) throws -> [Contact] {
         let options = ContactFetchOptions(emailFilter: email, fields: fields)
         return try getContacts(options: options).contacts
     }
@@ -400,6 +400,16 @@ extension ContactManager {
         return ContactFetchResult(contacts: contacts, hasNextPage: hasNextPage)
     }
 
+    /// Returns the cleaned custom-label string when a CN label is a non-standard
+    /// (custom) label, otherwise nil. `isOther` indicates the typed enum resolved
+    /// to `.other`, which is the only case where the raw label may be custom.
+    private func customLabelString(_ cnLabel: String?, isOther: Bool) -> String? {
+        guard isOther, let cnLabel = cnLabel, !cnLabel.isEmpty, cnLabel != CNLabelOther else {
+            return nil
+        }
+        return CNLabeledValue<NSString>.localizedString(forLabel: cnLabel)
+    }
+
     private func contactFromCN(_ cn: CNContact, fields: ContactFields) -> Contact {
         let contact = Contact()
         contact.id = cn.identifier
@@ -428,8 +438,10 @@ extension ContactManager {
 
         if fields.contains(.phoneNumbers) {
             contact.phoneNumbers = cn.phoneNumbers.map { labeled in
-                ContactPhoneNumber(
-                    label: PhoneLabel.fromCNLabel(labeled.label),
+                let label = PhoneLabel.fromCNLabel(labeled.label)
+                return ContactPhoneNumber(
+                    label: label,
+                    customLabel: customLabelString(labeled.label, isOther: label == .other),
                     value: labeled.value.stringValue
                 )
             }
@@ -437,8 +449,10 @@ extension ContactManager {
 
         if fields.contains(.emailAddresses) {
             contact.emailAddresses = cn.emailAddresses.map { labeled in
-                ContactEmailAddress(
-                    label: EmailLabel.fromCNLabel(labeled.label),
+                let label = EmailLabel.fromCNLabel(labeled.label)
+                return ContactEmailAddress(
+                    label: label,
+                    customLabel: customLabelString(labeled.label, isOther: label == .other),
                     value: labeled.value as String
                 )
             }
@@ -447,8 +461,10 @@ extension ContactManager {
         if fields.contains(.postalAddresses) {
             contact.postalAddresses = cn.postalAddresses.map { labeled in
                 let addr = labeled.value
+                let label = AddressLabel.fromCNLabel(labeled.label)
                 return ContactPostalAddress(
-                    label: AddressLabel.fromCNLabel(labeled.label),
+                    label: label,
+                    customLabel: customLabelString(labeled.label, isOther: label == .other),
                     street: addr.street,
                     city: addr.city,
                     state: addr.state,
@@ -502,8 +518,10 @@ extension ContactManager {
 
             contact.dates = cn.dates.map { labeled in
                 let dc = labeled.value
+                let label = DateLabel.fromCNLabel(labeled.label)
                 return ContactDate(
-                    label: DateLabel.fromCNLabel(labeled.label),
+                    label: label,
+                    customLabel: customLabelString(labeled.label, isOther: label == .other),
                     day: dc.day as Int,
                     month: dc.month as Int,
                     year: dc.year
@@ -513,8 +531,10 @@ extension ContactManager {
 
         if fields.contains(.relationships) {
             contact.relationships = cn.contactRelations.map { labeled in
-                ContactRelationship(
-                    label: RelationshipLabel.fromCNLabel(labeled.label),
+                let label = RelationshipLabel.fromCNLabel(labeled.label)
+                return ContactRelationship(
+                    label: label,
+                    customLabel: customLabelString(labeled.label, isOther: label == .other),
                     name: labeled.value.name
                 )
             }
@@ -653,7 +673,9 @@ extension ContactManager {
             // only include the restricted note key when the update actually carries
             // a note to write; otherwise the fetch would require the
             // `com.apple.developer.contacts.notes` entitlement for every update.
-            let fetchFields: ContactFields = contact.note.isEmpty ? ContactFields.all : ContactFields.everything
+            // `.default` already excludes the note (and image), so add image back
+            // and add the note only when one is being written.
+            let fetchFields: ContactFields = contact.note.isEmpty ? ContactFields.default.union(.image) : ContactFields.all
             let keys = keysToFetch(options: ContactFetchOptions(fields: fetchFields))
             let cnContact = try contactStore.unifiedContact(withIdentifier: contactID, keysToFetch: keys)
             let mutable = cnContact.mutableCopy() as! CNMutableContact
@@ -963,14 +985,22 @@ extension ContactManager {
                 case android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE:
                     let number = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)) ?? ""
                     let typeInt = dataCursor.getInt(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.TYPE))
-                    let label = androidPhoneTypeToLabel(typeInt)
-                    contact.phoneNumbers.append(ContactPhoneNumber(label: label, value: number))
+                    if typeInt == android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM {
+                        let custom = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.LABEL)) ?? ""
+                        contact.phoneNumbers.append(ContactPhoneNumber(label: .other, customLabel: custom, value: number))
+                    } else {
+                        contact.phoneNumbers.append(ContactPhoneNumber(label: androidPhoneTypeToLabel(typeInt), value: number))
+                    }
 
                 case android.provider.ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE:
                     let email = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Email.ADDRESS)) ?? ""
                     let typeInt = dataCursor.getInt(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Email.TYPE))
-                    let label = androidEmailTypeToLabel(typeInt)
-                    contact.emailAddresses.append(ContactEmailAddress(label: label, value: email))
+                    if typeInt == android.provider.ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM {
+                        let custom = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Email.LABEL)) ?? ""
+                        contact.emailAddresses.append(ContactEmailAddress(label: .other, customLabel: custom, value: email))
+                    } else {
+                        contact.emailAddresses.append(ContactEmailAddress(label: androidEmailTypeToLabel(typeInt), value: email))
+                    }
 
                 case android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE:
                     let street = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.STREET)) ?? ""
@@ -979,8 +1009,12 @@ extension ContactManager {
                     let postalCode = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.POSTCODE)) ?? ""
                     let country = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.COUNTRY)) ?? ""
                     let typeInt = dataCursor.getInt(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.TYPE))
-                    let label = androidAddressTypeToLabel(typeInt)
-                    contact.postalAddresses.append(ContactPostalAddress(label: label, street: street, city: city, state: state, postalCode: postalCode, country: country))
+                    let postal = ContactPostalAddress(label: androidAddressTypeToLabel(typeInt), street: street, city: city, state: state, postalCode: postalCode, country: country)
+                    if typeInt == android.provider.ContactsContract.CommonDataKinds.StructuredPostal.TYPE_CUSTOM {
+                        postal.label = .other
+                        postal.customLabel = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.LABEL)) ?? ""
+                    }
+                    contact.postalAddresses.append(postal)
 
                 case android.provider.ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE:
                     contact.organizationName = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Organization.COMPANY)) ?? ""
@@ -999,6 +1033,9 @@ extension ContactManager {
                         contact.birthday = ContactDate(label: .birthday, day: parsed.day, month: parsed.month, year: parsed.year)
                     } else if typeInt == android.provider.ContactsContract.CommonDataKinds.Event.TYPE_ANNIVERSARY {
                         contact.dates.append(ContactDate(label: .anniversary, day: parsed.day, month: parsed.month, year: parsed.year))
+                    } else if typeInt == android.provider.ContactsContract.CommonDataKinds.Event.TYPE_CUSTOM {
+                        let custom = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Event.LABEL)) ?? ""
+                        contact.dates.append(ContactDate(label: .other, customLabel: custom, day: parsed.day, month: parsed.month, year: parsed.year))
                     } else {
                         contact.dates.append(ContactDate(label: .other, day: parsed.day, month: parsed.month, year: parsed.year))
                     }
@@ -1006,13 +1043,20 @@ extension ContactManager {
                 case android.provider.ContactsContract.CommonDataKinds.Relation.CONTENT_ITEM_TYPE:
                     let name = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Relation.NAME)) ?? ""
                     let typeInt = dataCursor.getInt(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Relation.TYPE))
-                    let label = androidRelationTypeToLabel(typeInt)
-                    contact.relationships.append(ContactRelationship(label: label, name: name))
+                    if typeInt == android.provider.ContactsContract.CommonDataKinds.Relation.TYPE_CUSTOM {
+                        let custom = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Relation.LABEL)) ?? ""
+                        contact.relationships.append(ContactRelationship(label: .other, customLabel: custom, name: name))
+                    } else {
+                        contact.relationships.append(ContactRelationship(label: androidRelationTypeToLabel(typeInt), name: name))
+                    }
 
                 case android.provider.ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE:
                     let username = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Im.DATA)) ?? ""
                     let protocolInt = dataCursor.getInt(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL))
-                    let service = androidIMProtocolToString(protocolInt)
+                    var service = androidIMProtocolToString(protocolInt)
+                    if protocolInt == android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_CUSTOM {
+                        service = dataCursor.getString(dataCursor.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Im.CUSTOM_PROTOCOL)) ?? service
+                    }
                     contact.instantMessageAddresses.append(ContactInstantMessageAddress(username: username, service: service))
 
                 case android.provider.ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE:
@@ -1033,6 +1077,13 @@ extension ContactManager {
         // Load photo if requested
         if fields.contains(.image) {
             loadAndroidContactImage(resolver: resolver, contact: contact, contactID: contactID)
+        }
+
+        // Android has no explicit person/organization flag, so infer it: a contact
+        // with company info but no personal name is treated as an organization,
+        // mirroring how iOS reports CNContactType.
+        if !contact.organizationName.isEmpty && contact.givenName.isEmpty && contact.middleName.isEmpty && contact.familyName.isEmpty {
+            contact.contactType = .organization
         }
     }
 
@@ -1120,7 +1171,7 @@ extension ContactManager {
                     .withValue(android.provider.ContactsContract.RawContacts.ACCOUNT_NAME, nil)
                     .build()
             )
-            appendAndroidContactDataOps(ops: ops, contact: contact, rawContactIndex: rawContactIndex)
+            appendAndroidContactDataOps(ops: ops, contact: contact, rawContactIndex: rawContactIndex, rawContactID: nil)
         }
 
         let results = resolver.applyBatch(android.provider.ContactsContract.AUTHORITY, ops)
@@ -1138,67 +1189,84 @@ extension ContactManager {
 
     /// Appends the data-row insert operations for a contact to the batch, each
     /// back-referencing the raw-contact insert operation at `rawContactIndex`.
-    private func appendAndroidContactDataOps(ops: java.util.ArrayList<android.content.ContentProviderOperation>, contact: Contact, rawContactIndex: Int) {
+    /// Returns a `Data`-row insert builder whose RAW_CONTACT_ID is bound either to a
+    /// batch back-reference (create, when `rawContactID` is nil) or to an existing
+    /// raw-contact id (in-place update).
+    private func androidDataInsert(rawContactIndex: Int, rawContactID: String?) -> android.content.ContentProviderOperation.Builder {
+        let builder = android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
+        if let rawContactID = rawContactID {
+            return builder.withValue(android.provider.ContactsContract.Data.RAW_CONTACT_ID, java.lang.Long.parseLong(rawContactID))
+        } else {
+            return builder.withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
+        }
+    }
+
+    private func appendAndroidContactDataOps(ops: java.util.ArrayList<android.content.ContentProviderOperation>, contact: Contact, rawContactIndex: Int, rawContactID: String?) {
         // Name
-        let nameOp = android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-            .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
-            .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
-            .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PREFIX, contact.namePrefix)
-            .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME, contact.givenName)
-            .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.MIDDLE_NAME, contact.middleName)
-            .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME, contact.familyName)
-            .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.SUFFIX, contact.nameSuffix)
-            .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PHONETIC_GIVEN_NAME, contact.phoneticGivenName)
-            .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PHONETIC_MIDDLE_NAME, contact.phoneticMiddleName)
-            .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PHONETIC_FAMILY_NAME, contact.phoneticFamilyName)
-            .build()
-        ops.add(nameOp)
+        ops.add(
+            androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
+                .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PREFIX, contact.namePrefix)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME, contact.givenName)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.MIDDLE_NAME, contact.middleName)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME, contact.familyName)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.SUFFIX, contact.nameSuffix)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PHONETIC_GIVEN_NAME, contact.phoneticGivenName)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PHONETIC_MIDDLE_NAME, contact.phoneticMiddleName)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredName.PHONETIC_FAMILY_NAME, contact.phoneticFamilyName)
+                .build()
+        )
 
         // Phone numbers
         for phone in contact.phoneNumbers {
-            ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
-                    .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER, phone.value)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.Phone.TYPE, labelToAndroidPhoneType(phone.label))
-                    .build()
-            )
+            var op = androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
+                .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER, phone.value)
+            if let custom = phone.customLabel, !custom.isEmpty {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Phone.TYPE, android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM)
+                    .withValue(android.provider.ContactsContract.CommonDataKinds.Phone.LABEL, custom)
+            } else {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Phone.TYPE, labelToAndroidPhoneType(phone.label))
+            }
+            ops.add(op.build())
         }
 
         // Emails
         for email in contact.emailAddresses {
-            ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
-                    .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.Email.ADDRESS, email.value)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.Email.TYPE, labelToAndroidEmailType(email.label))
-                    .build()
-            )
+            var op = androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
+                .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.Email.ADDRESS, email.value)
+            if let custom = email.customLabel, !custom.isEmpty {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Email.TYPE, android.provider.ContactsContract.CommonDataKinds.Email.TYPE_CUSTOM)
+                    .withValue(android.provider.ContactsContract.CommonDataKinds.Email.LABEL, custom)
+            } else {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Email.TYPE, labelToAndroidEmailType(email.label))
+            }
+            ops.add(op.build())
         }
 
         // Postal addresses
         for addr in contact.postalAddresses {
-            ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
-                    .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.STREET, addr.street)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CITY, addr.city)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.REGION, addr.state)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.POSTCODE, addr.postalCode)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.COUNTRY, addr.country)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.TYPE, labelToAndroidAddressType(addr.label))
-                    .build()
-            )
+            var op = androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
+                .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.STREET, addr.street)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CITY, addr.city)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.REGION, addr.state)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.POSTCODE, addr.postalCode)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.COUNTRY, addr.country)
+            if let custom = addr.customLabel, !custom.isEmpty {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.TYPE, android.provider.ContactsContract.CommonDataKinds.StructuredPostal.TYPE_CUSTOM)
+                    .withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.LABEL, custom)
+            } else {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.StructuredPostal.TYPE, labelToAndroidAddressType(addr.label))
+            }
+            ops.add(op.build())
         }
 
         // Organization
         if !contact.organizationName.isEmpty || !contact.jobTitle.isEmpty || !contact.departmentName.isEmpty {
             ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
+                androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Organization.COMPANY, contact.organizationName)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Organization.DEPARTMENT, contact.departmentName)
@@ -1210,19 +1278,30 @@ extension ContactManager {
         // URLs
         for url in contact.urlAddresses {
             ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
+                androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Website.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Website.URL, url.value)
                     .build()
             )
         }
 
+        // Instant message addresses
+        for im in contact.instantMessageAddresses {
+            let protocolInt = androidStringToIMProtocol(im.service)
+            var op = androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
+                .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.Im.DATA, im.username)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL, protocolInt)
+            if protocolInt == android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_CUSTOM {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Im.CUSTOM_PROTOCOL, im.service)
+            }
+            ops.add(op.build())
+        }
+
         // Note
         if !contact.note.isEmpty {
             ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
+                androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Note.NOTE, contact.note)
                     .build()
@@ -1233,8 +1312,7 @@ extension ContactManager {
         if let bday = contact.birthday {
             let dateStr = formatAndroidDateString(day: bday.day, month: bday.month, year: bday.year)
             ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
+                androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Event.START_DATE, dateStr)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Event.TYPE, android.provider.ContactsContract.CommonDataKinds.Event.TYPE_BIRTHDAY)
@@ -1242,29 +1320,59 @@ extension ContactManager {
             )
         }
 
+        // Additional dates (anniversary / other)
+        for date in contact.dates {
+            let dateStr = formatAndroidDateString(day: date.day, month: date.month, year: date.year)
+            var op = androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
+                .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.Event.START_DATE, dateStr)
+            if let custom = date.customLabel, !custom.isEmpty {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Event.TYPE, android.provider.ContactsContract.CommonDataKinds.Event.TYPE_CUSTOM)
+                    .withValue(android.provider.ContactsContract.CommonDataKinds.Event.LABEL, custom)
+            } else if date.label == .anniversary {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Event.TYPE, android.provider.ContactsContract.CommonDataKinds.Event.TYPE_ANNIVERSARY)
+            } else {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Event.TYPE, android.provider.ContactsContract.CommonDataKinds.Event.TYPE_OTHER)
+            }
+            ops.add(op.build())
+        }
+
         // Relationships
         for rel in contact.relationships {
-            ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
-                    .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Relation.CONTENT_ITEM_TYPE)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.Relation.NAME, rel.name)
-                    .withValue(android.provider.ContactsContract.CommonDataKinds.Relation.TYPE, labelToAndroidRelationType(rel.label))
-                    .build()
-            )
+            var op = androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
+                .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Relation.CONTENT_ITEM_TYPE)
+                .withValue(android.provider.ContactsContract.CommonDataKinds.Relation.NAME, rel.name)
+            if let custom = rel.customLabel, !custom.isEmpty {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Relation.TYPE, android.provider.ContactsContract.CommonDataKinds.Relation.TYPE_CUSTOM)
+                    .withValue(android.provider.ContactsContract.CommonDataKinds.Relation.LABEL, custom)
+            } else {
+                op = op.withValue(android.provider.ContactsContract.CommonDataKinds.Relation.TYPE, labelToAndroidRelationType(rel.label))
+            }
+            ops.add(op.build())
         }
 
         // Nickname
         if !contact.nickname.isEmpty {
             ops.add(
-                android.content.ContentProviderOperation.newInsert(android.provider.ContactsContract.Data.CONTENT_URI)
-                    .withValueBackReference(android.provider.ContactsContract.Data.RAW_CONTACT_ID, rawContactIndex)
+                androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
                     .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE)
                     .withValue(android.provider.ContactsContract.CommonDataKinds.Nickname.NAME, contact.nickname)
                     .build()
             )
         }
 
+        // Photo (thumbnail slot; the provider may downscale large images)
+        if let image = contact.image {
+            let bytes = image.imageData ?? image.thumbnailData
+            if let bytes = bytes {
+                ops.add(
+                    androidDataInsert(rawContactIndex: rawContactIndex, rawContactID: rawContactID)
+                        .withValue(android.provider.ContactsContract.Data.MIMETYPE, android.provider.ContactsContract.CommonDataKinds.Photo.CONTENT_ITEM_TYPE)
+                        .withValue(android.provider.ContactsContract.CommonDataKinds.Photo.PHOTO, bytes.platformValue)
+                        .build()
+                )
+            }
+        }
     }
 
     /// Resolves the aggregate contact ID from a freshly inserted raw-contact URI.
@@ -1295,16 +1403,85 @@ extension ContactManager {
     }
 
     private func updateAndroidContacts(_ contacts: [Contact]) throws {
-        // Android has no in-place update, so each contact is deleted and recreated.
-        // This is performed per contact rather than as a single transaction, and
-        // the recreated contacts receive new identifiers. `createAndroidContact`
-        // ignores the contact's existing `id`, so the value can be passed as-is.
+        let context = ProcessInfo.processInfo.androidContext
+        let resolver = context.getContentResolver()
+
+        // Update in place: for each contact, within a single atomic applyBatch,
+        // delete the managed Data rows on its existing raw contact and re-insert
+        // them from the model. This preserves the aggregate contact ID, the
+        // RawContacts row (account binding), and any rows we do not manage
+        // (notably GroupMembership). The note and photo rows are only replaced
+        // when the model carries a value, so a default fetch (which excludes the
+        // entitlement-gated note) does not silently clear them — matching iOS.
+        let ops = java.util.ArrayList<android.content.ContentProviderOperation>()
         for contact in contacts {
             guard let contactID = contact.id else {
                 throw ContactError.invalidData("Contact must have an id to update")
             }
-            try deleteAndroidContact(id: contactID)
-            let _ = try createAndroidContact(contact)
+            // Update the primary raw contact; data on other aggregated raw
+            // contacts (e.g. from other accounts) is left untouched.
+            guard let rawContactID = androidRawContactIDs(resolver: resolver, contactID: contactID).first else {
+                throw ContactError.contactNotFound
+            }
+            appendAndroidUpdateOps(ops: ops, contact: contact, rawContactID: rawContactID)
+        }
+
+        if ops.size == 0 {
+            return
+        }
+        let _ = resolver.applyBatch(android.provider.ContactsContract.AUTHORITY, ops)
+    }
+
+    /// Appends the delete-and-reinsert operations that replace a contact's managed
+    /// Data rows in place on the raw contact `rawContactID`.
+    private func appendAndroidUpdateOps(ops: java.util.ArrayList<android.content.ContentProviderOperation>, contact: Contact, rawContactID: String) {
+        // MIME types whose rows are always replaced from the model.
+        var mimeTypes: [String] = [
+            android.provider.ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.Website.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.Relation.CONTENT_ITEM_TYPE,
+            android.provider.ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE,
+        ]
+        // Only replace note/photo when the model actually carries one, so an
+        // unfetched note or photo is preserved rather than silently dropped.
+        if !contact.note.isEmpty {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE)
+        }
+        if contact.image != nil {
+            mimeTypes.append(android.provider.ContactsContract.CommonDataKinds.Photo.CONTENT_ITEM_TYPE)
+        }
+
+        let placeholders = mimeTypes.map { _ in "?" }.joined(separator: ",")
+        let selection = "\(android.provider.ContactsContract.Data.RAW_CONTACT_ID) = ? AND \(android.provider.ContactsContract.Data.MIMETYPE) IN (\(placeholders))"
+        var args = [rawContactID]
+        args.append(contentsOf: mimeTypes)
+        ops.add(
+            android.content.ContentProviderOperation.newDelete(android.provider.ContactsContract.Data.CONTENT_URI)
+                .withSelection(selection, args.toList().toTypedArray())
+                .build()
+        )
+
+        // Re-insert the managed rows bound directly to the existing raw contact.
+        appendAndroidContactDataOps(ops: ops, contact: contact, rawContactIndex: 0, rawContactID: rawContactID)
+    }
+
+    private func androidStringToIMProtocol(_ service: String) -> Int {
+        switch service {
+        case "AIM": return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_AIM
+        case "MSN": return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_MSN
+        case "Yahoo": return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_YAHOO
+        case "Skype": return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_SKYPE
+        case "QQ": return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_QQ
+        case "Google Talk": return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_GOOGLE_TALK
+        case "ICQ": return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_ICQ
+        case "Jabber": return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_JABBER
+        default: return android.provider.ContactsContract.CommonDataKinds.Im.PROTOCOL_CUSTOM
         }
     }
 

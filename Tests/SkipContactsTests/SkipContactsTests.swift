@@ -277,9 +277,10 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(options.pageSize == nil)
         #expect(options.pageOffset == nil)
         #expect(options.sortOrder == .none)
-        // The default field set is `.all` (every field except the restricted note).
-        #expect(options.fields.rawValue == ContactFields.all.rawValue)
-        #expect(options.fields.contains(.image))
+        // The default field set is `.default` (every field except image and the restricted note).
+        #expect(options.fields.rawValue == ContactFields.default.rawValue)
+        #expect(options.fields.contains(.name))
+        #expect(!options.fields.contains(.image))
         #expect(!options.fields.contains(.note))
     }
 
@@ -339,23 +340,27 @@ let logger: Logger = Logger(subsystem: "SkipContacts", category: "Tests")
         #expect(!summary.contains(.note))
     }
 
-    @Test func testContactFieldsAllExcludesNote() throws {
-        // `.all` must include every flag except the entitlement-restricted note.
+    @Test func testContactFieldsDefaultAndAll() throws {
+        // `.default` includes the common fields but excludes image and the restricted note.
+        #expect(ContactFields.default.contains(.name))
+        #expect(ContactFields.default.contains(.relationships))
+        #expect(!ContactFields.default.contains(.image))
+        #expect(!ContactFields.default.contains(.note))
+
+        // `.all` includes every field, including image and note.
         #expect(ContactFields.all.contains(.name))
         #expect(ContactFields.all.contains(.image))
+        #expect(ContactFields.all.contains(.note))
         #expect(ContactFields.all.contains(.relationships))
-        #expect(!ContactFields.all.contains(.note))
-
-        // `.everything` adds the note on top of `.all`.
-        #expect(ContactFields.everything.contains(.note))
-        #expect(ContactFields.everything.contains(.image))
     }
 
     @Test func testContactFieldsUnion() throws {
-        let combined = ContactFields.all.union(.note)
+        // `.default` plus image plus note is the whole set.
+        let combined = ContactFields.default.union(.image).union(.note)
         #expect(combined.contains(.note))
+        #expect(combined.contains(.image))
         #expect(combined.contains(.name))
-        #expect(combined.rawValue == ContactFields.everything.rawValue)
+        #expect(combined.rawValue == ContactFields.all.rawValue)
     }
 
     // MARK: - Fetch Result
@@ -672,7 +677,7 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
         contact.note = "This is a test note from skip-contacts integration tests"
 
         try withTestContact(contact) { id in
-            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.everything))
+            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.all))
             #expect(fetched.note == "This is a test note from skip-contacts integration tests")
         }
     }
@@ -776,11 +781,12 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
             #expect(orgOnly.givenName == "")
             #expect(orgOnly.phoneNumbers.isEmpty)
 
-            // The full default set includes everything except the restricted note.
+            // The default field set includes the common fields (but not image or note).
             let full = try #require(try manager.getContact(id: id))
             #expect(full.givenName == unique)
             #expect(full.postalAddresses.count >= 1)
             #expect(full.organizationName == "Acme Inc")
+            #expect(full.image == nil)
         }
     }
 
@@ -919,6 +925,108 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
 
         if let caught = caught {
             throw caught
+        }
+    }
+
+    // MARK: - Round-trip parity & in-place update
+
+    @Test func testUpdatePreservesIDAndGroupMembership() throws {
+        guard isLiveDevice() else { return }
+
+        let manager = ContactManager.shared
+        let unique = "SkipUpdId\(Int.random(in: 10000..<99999))"
+        let contact = Contact(givenName: unique, familyName: "Before")
+        contact.phoneNumbers = [ContactPhoneNumber(label: .mobile, value: "+15550112233")]
+        let id = try manager.createContact(contact)
+        let groupName = "SkipUpdGrp\(Int.random(in: 10000..<99999))"
+        let groupID = try manager.createGroup(name: groupName)
+
+        var caught: Error? = nil
+        do {
+            try manager.addContactToGroup(contactID: id, groupID: groupID)
+
+            let edit = Contact(id: id, givenName: unique, familyName: "After")
+            edit.phoneNumbers = [ContactPhoneNumber(label: .mobile, value: "+15550112233")]
+            try manager.updateContact(edit)
+
+            // The update is in place, so the identifier is preserved on both platforms.
+            let fetched = try #require(try manager.getContact(id: id))
+            #expect(fetched.id == id)
+            #expect(fetched.familyName == "After")
+
+            // Group membership (a row the Contact model does not carry) must survive the update.
+            let members = try manager.getContacts(inGroup: groupID)
+            #expect(members.contains { $0.id == id })
+        } catch {
+            caught = error
+        }
+        try? manager.deleteContact(id: id)
+        try? manager.deleteGroup(id: groupID)
+        if let caught = caught { throw caught }
+    }
+
+    @Test func testImageRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        // A valid 96×96 PNG (the provider's default thumbnail size; a degenerate
+        // 1×1 image is rejected by Android's PhotoProcessor). The platform may
+        // re-encode/downscale it, but it must round-trip as available.
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAAxElEQVR42u3ZsQ2AMAwEQIexoWZuM4Ip4Ivovo5SnOzi5dXdNWVd45Pqu7b85ygBBAgQIECAAAESQIA+z6pz7mK79qw3/5ggQIAAAQIECBAgAQTojy7mLmaCrBggQIAAAQIkgAAByncxdzETZMUAAQIECBAgAQQIUL6LuYuZICsGCBAgQIAACSBAgPJdzF3MBFkxQIAAAQIESAABApTvYu5iJsiKAQIECBAgQAIIEKB8F3MXM0FWDBAgQIAAARJAgADF8wBXmUqRQejrQAAAAABJRU5ErkJggg=="))
+        let contact = Contact(givenName: "SkipImage\(Int.random(in: 10000..<99999))", familyName: "Photo")
+        contact.image = ContactImage(imageData: png)
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.all))
+            #expect(fetched.image?.isAvailable == true)
+        }
+    }
+
+    @Test func testInstantMessageRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipIM\(Int.random(in: 10000..<99999))", familyName: "Messenger")
+        contact.instantMessageAddresses = [ContactInstantMessageAddress(username: "skipper", service: "Skype")]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.instantMessageAddresses.contains { $0.username == "skipper" })
+        }
+    }
+
+    @Test func testAnniversaryRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipAnniv\(Int.random(in: 10000..<99999))", familyName: "Dates")
+        contact.dates = [ContactDate(label: .anniversary, day: 14, month: 2, year: 2010)]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            let anniv = fetched.dates.first { $0.day == 14 && $0.month == 2 }
+            #expect(anniv != nil)
+        }
+    }
+
+    @Test func testCustomLabelRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(givenName: "SkipCustom\(Int.random(in: 10000..<99999))", familyName: "Label")
+        contact.phoneNumbers = [ContactPhoneNumber(label: .other, customLabel: "Emergency", value: "+15550199999")]
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            let phone = fetched.phoneNumbers.first { $0.value.contains("0199999") }
+            #expect(phone?.customLabel == "Emergency")
+        }
+    }
+
+    @Test func testOrganizationContactTypeRoundTrip() throws {
+        guard isLiveDevice() else { return }
+
+        let contact = Contact(contactType: .organization, organizationName: "SkipOrg\(Int.random(in: 10000..<99999))")
+
+        try withTestContact(contact) { id in
+            let fetched = try #require(try ContactManager.shared.getContact(id: id))
+            #expect(fetched.contactType == .organization)
         }
     }
 
@@ -1093,7 +1201,7 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
         contact.note = "Integration test complex contact"
 
         try withTestContact(contact) { id in
-            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.everything))
+            let fetched = try #require(try ContactManager.shared.getContact(id: id, fields: ContactFields.all))
             #expect(fetched.givenName == "SkipComplex")
             #expect(fetched.familyName == "RoundTrip")
             #expect(fetched.organizationName == "Skip Tools")
