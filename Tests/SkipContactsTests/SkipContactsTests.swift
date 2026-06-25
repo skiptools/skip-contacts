@@ -962,8 +962,10 @@ private func withTestContact(_ contact: Contact, body: (String) throws -> Void) 
     @Test func testImageRoundTrip() throws {
         guard isLiveDevice() else { return }
 
-        // A valid 1×1 PNG; the platform may transform/downscale it, but it must round-trip as available.
-        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="))
+        // A valid 96×96 PNG (the provider's default thumbnail size; a degenerate
+        // 1×1 image is rejected by Android's PhotoProcessor). The platform may
+        // re-encode/downscale it, but it must round-trip as available.
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAAxElEQVR42u3ZsQ2AMAwEQIexoWZuM4Ip4Ivovo5SnOzi5dXdNWVd45Pqu7b85ygBBAgQIECAAAESQIA+z6pz7mK79qw3/5ggQIAAAQIECBAgAQTojy7mLmaCrBggQIAAAQIkgAAByncxdzETZMUAAQIECBAgAQQIUL6LuYuZICsGCBAgQIAACSBAgPJdzF3MBFkxQIAAAQIESAABApTvYu5iJsiKAQIECBAgQAIIEKB8F3MXM0FWDBAgQIAAARJAgADF8wBXmUqRQejrQAAAAABJRU5ErkJggg=="))
         let contact = Contact(givenName: "SkipImage\(Int.random(in: 10000..<99999))", familyName: "Photo")
         contact.image = ContactImage(imageData: png)
 
