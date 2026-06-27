@@ -4,9 +4,7 @@
 #if !SKIP_BRIDGE
 import Foundation
 import OSLog
-#if canImport(SwiftUI)
 import SwiftUI
-#endif
 
 #if !SKIP
 #if canImport(ContactsUI)
@@ -16,10 +14,6 @@ import ContactsUI
 #endif
 
 private let uiLogger: Logger = Logger(subsystem: "skip.contacts", category: "ContactUI")
-
-// MARK: - Contact Picker
-
-#if canImport(SwiftUI)
 
 extension View {
     /// Present the native contact picker.
@@ -137,8 +131,6 @@ extension View {
         #endif
     }
 }
-
-#endif
 
 // MARK: - Android Intent Launchers
 
