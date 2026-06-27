@@ -6,6 +6,11 @@ import Foundation
 import OSLog
 import SwiftUI
 
+#if SKIP
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+#endif
+
 #if !SKIP
 #if canImport(ContactsUI)
 import Contacts
@@ -35,10 +40,25 @@ extension View {
         onCancel: (() -> Void)? = nil
     ) -> some View {
         #if SKIP
-        self.onChange(of: isPresented.wrappedValue) { _, newValue in
-            if newValue {
-                launchAndroidContactPicker(onSelectContact: onSelectContact, onCancel: onCancel)
-                isPresented.wrappedValue = false
+        // `startActivity` does not deliver a result, so the picked contact must be received through
+        // an Activity Result launcher. `PickContact` returns the selected contact's content Uri; we
+        // resolve it to the `Contacts._ID` that `ContactManager.getContact(id:)` expects.
+        let pickContactLauncher = rememberLauncherForActivityResult(contract: ActivityResultContracts.PickContact()) { uri in
+            isPresented.wrappedValue = false
+            if let uri = uri {
+                // The picked contact URI ends with the Contacts._ID — the identifier that
+                // ContactManager.getContact(id:) expects. Reading the last path segment avoids a
+                // contentResolver query (and thus does not require contacts permission at pick time).
+                if let contactID = uri.lastPathSegment {
+                    onSelectContact?(contactID)
+                }
+            } else {
+                onCancel?()
+            }
+        }
+        return onChange(of: isPresented.wrappedValue) { _, presented in
+            if presented == true {
+                pickContactLauncher.launch(nil)
             }
         }
         #elseif os(iOS)
@@ -136,17 +156,6 @@ extension View {
 
 #if SKIP
 
-private func launchAndroidContactPicker(onSelectContact: ((String) -> Void)?, onCancel: (() -> Void)?) {
-    let context = ProcessInfo.processInfo.androidContext
-    let intent = android.content.Intent(android.content.Intent.ACTION_PICK, android.provider.ContactsContract.Contacts.CONTENT_URI)
-    if let activity = context as? android.app.Activity {
-        activity.startActivity(intent)
-    } else {
-        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-    }
-}
-
 private func launchAndroidContactViewer(contactID: String) {
     let context = ProcessInfo.processInfo.androidContext
     let contactUri = android.content.ContentUris.withAppendedId(android.provider.ContactsContract.Contacts.CONTENT_URI, java.lang.Long.parseLong(contactID))
@@ -226,9 +235,22 @@ struct ContactPickerRepresentable: UIViewControllerRepresentable {
 
     @MainActor class Coordinator: NSObject, CNContactPickerDelegate {
         let parent: ContactPickerRepresentable
+        nonisolated let multipleSelection: Bool
 
         init(_ parent: ContactPickerRepresentable) {
             self.parent = parent
+            self.multipleSelection = parent.multipleSelection
+        }
+
+        // CNContactPickerViewController enters multiple-selection mode whenever its delegate responds
+        // to the array `didSelect contacts:` callback, and in that mode the single-selection
+        // `didSelect contact:` that drives onSelectContact is never invoked. Advertise the array
+        // callback only when multiple selection was requested, so single taps deliver onSelectContact.
+        nonisolated override func responds(to aSelector: Selector!) -> Bool {
+            if aSelector == #selector(contactPicker(_:didSelect:) as (CNContactPickerViewController, [CNContact]) -> Void) {
+                return multipleSelection
+            }
+            return super.responds(to: aSelector)
         }
 
         nonisolated func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
